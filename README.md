@@ -67,10 +67,10 @@ Examples:
 
 ## VS Code MCP config
 
-1. Locate your workspace folder.
-2. Edit `.vscode/mcp.json`.
+***IDL extension and MCP for VS Code is recommended. Get it from VS Code extension store.***
 
-Example MCP server config with `swmf_root`:
+1. Locate your workspace folder.
+2. Edit `.vscode/mcp.json`. Example MCP server config with `swmf_root`:
 
 ```json
 {
@@ -87,10 +87,11 @@ Example MCP server config with `swmf_root`:
 }
 ```
 
-**IDL extension and MCP for VS Code is recommended.**
+3. Click on "Start" to start SWMF MCP server.
 
-Click on "Start" to start SWMF MCP server.
 ![Start Server](demo/start-server.png)
+
+4. Now open Github Copilot and chat. You shall see `swmf-prototype` in `Configure Tools..` menu.
 
 ## Implemented tools:
 - `swmf_validate_param`
@@ -154,23 +155,33 @@ Performance notes for authoritative validation:
 ### Request Flow Diagram
 
 ```mermaid
-flowchart LR
-	U[User in Chat] --> A[AI Assistant]
-	A -->|MCP tool call| S[SWMF MCP Server]
+%%{init: {'flowchart': {'curve': 'basis'}}}%%
+flowchart TB
+    U["User in Chat"] --> A["AI Assistant"]
+    A -->|MCP tool call| S["SWMF MCP Server"]
 
-	S --> T[Tool Layer\n(contracts + input models)]
-	T --> V[Service Layer\n(validation/explain/build/run)]
+    S --> T["Tool Layer"]
+    T --> V["Service Layer"]
+    V --> P["Parsing + Discovery + Catalog"]
 
-	V --> P[Parsing + Discovery + Catalog]
-	P --> X[SWMF Sources\nPARAM.XML, TestParam.pl, examples]
+    P --> X["SWMF Sources"]
+    X --> P
 
-	X --> P
-	P --> V
-	V --> T
-	T -->|structured response| A
-	A --> U
+    K["Curated Knowledge"] --> V
 
-	K[Curated Knowledge\nnon-authoritative hints] --> V
+    T -->|structured response| A
+    A --> U
+
+    subgraph Inputs
+        K
+        X
+    end
+
+    subgraph Layers
+        T
+        V
+        P
+    end
 ```
 
 The server is now a thin MCP adapter over explicit subsystems:
