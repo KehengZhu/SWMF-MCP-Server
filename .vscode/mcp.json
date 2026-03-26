@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "swmf-prototype": {
+      "command": "/Users/zkeheng/SWMFSoftware/swmf-mcp-prototype/.venv/bin/python",
+      "args": ["-m", "swmf_mcp_server.server"]
+    }
+  }
+}
