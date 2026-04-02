@@ -801,6 +801,43 @@ def swmf_prepare_sc_quickrun_from_magnetogram(
     )
 
 
+def swmf_list_build_run_tool_capabilities() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "hard_error": False,
+        "authority": "authoritative",
+        "source_kind": "implementation",
+        "source_paths": ["src/swmf_mcp_server/tools/build_run.py"],
+        "domain": "build_run",
+        "tools": {
+            "swmf_prepare_build": {
+                "description": "Prepare SWMF build commands from component and compiler selections."
+            },
+            "swmf_prepare_component_config": {
+                "description": "Prepare component configuration guidance from PARAM content."
+            },
+            "swmf_explain_component_config_fix": {
+                "description": "Explain recommended fixes for component-configuration mismatches."
+            },
+            "swmf_infer_job_layout": {
+                "description": "Infer MPI/job layout settings from job scripts or run context."
+            },
+            "swmf_prepare_run": {
+                "description": "Prepare SWMF run commands and PARAM snippets from component map inputs."
+            },
+            "swmf_detect_setup_commands": {
+                "description": "Detect allowed setup commands embedded in PARAM content."
+            },
+            "swmf_apply_setup_commands": {
+                "description": "Apply allowed setup commands within the resolved SWMF root."
+            },
+            "swmf_prepare_sc_quickrun_from_magnetogram": {
+                "description": "Prepare a heuristic SC quickrun plan from a magnetogram FITS file."
+            },
+        },
+    }
+
+
 def register(app: Any) -> None:
     app.tool(description="Prepare SWMF build commands from component and compiler selections.")(swmf_prepare_build)
     app.tool(description="Prepare component configuration guidance from PARAM content.")(swmf_prepare_component_config)
@@ -810,3 +847,4 @@ def register(app: Any) -> None:
     app.tool(description="Detect allowed setup commands embedded in PARAM content.")(swmf_detect_setup_commands)
     app.tool(description="Apply allowed setup commands within the resolved SWMF root.")(swmf_apply_setup_commands)
     app.tool(description="Prepare a heuristic SC quickrun plan from a magnetogram FITS file.")(swmf_prepare_sc_quickrun_from_magnetogram)
+    app.tool(description="List MCP tool capability contracts for SWMF build/run tooling.")(swmf_list_build_run_tool_capabilities)

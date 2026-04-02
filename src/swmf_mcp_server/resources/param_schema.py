@@ -59,6 +59,11 @@ def register(app: Any) -> None:
     if not hasattr(app, "resource"):
         return
 
-    @app.resource("swmf://param-schema/{component}")
-    def _param_schema_resource(component: str) -> dict[str, Any]:
+    @app.resource(
+        "swmf://param-schema/{component}",
+        name="swmf_param_schema",
+        description="Indexed PARAM.XML command metadata for one SWMF component.",
+        mime_type="application/json",
+    )
+    def param_schema_resource(component: str) -> dict[str, Any]:
         return get_param_schema_resource(component)

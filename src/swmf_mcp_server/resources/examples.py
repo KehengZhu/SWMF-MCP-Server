@@ -50,6 +50,11 @@ def register(app: Any) -> None:
     if not hasattr(app, "resource"):
         return
 
-    @app.resource("swmf://examples/{name}")
-    def _examples_resource(name: str) -> dict[str, Any]:
+    @app.resource(
+        "swmf://examples/{name}",
+        name="swmf_examples",
+        description="List indexed SWMF PARAM example files filtered by name.",
+        mime_type="application/json",
+    )
+    def examples_resource(name: str) -> dict[str, Any]:
         return get_examples_resource(name)

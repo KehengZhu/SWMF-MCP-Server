@@ -221,9 +221,38 @@ def swmf_trace_param_command(
     return with_root(trace_param_command(catalog, name=name, max_examples=max_examples), root)
 
 
+def swmf_list_retrieve_tool_capabilities() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "hard_error": False,
+        "authority": "authoritative",
+        "source_kind": "implementation",
+        "source_paths": ["src/swmf_mcp_server/tools/retrieve.py"],
+        "domain": "retrieve",
+        "tools": {
+            "swmf_list_available_components": {
+                "description": "List SWMF components discovered from authoritative PARAM.XML catalogs."
+            },
+            "swmf_find_param_command": {
+                "description": "Find command definitions and metadata for a PARAM command name."
+            },
+            "swmf_get_component_versions": {
+                "description": "Return available versions for one SWMF component or all components."
+            },
+            "swmf_find_example_params": {
+                "description": "Search indexed example PARAM files for matching query text."
+            },
+            "swmf_trace_param_command": {
+                "description": "Trace a PARAM command to definitions and example usages."
+            },
+        },
+    }
+
+
 def register(app: Any) -> None:
     app.tool(description="List SWMF components discovered from authoritative PARAM.XML catalogs.")(swmf_list_available_components)
     app.tool(description="Find command definitions and metadata for a PARAM command name.")(swmf_find_param_command)
     app.tool(description="Return available versions for one SWMF component or all components.")(swmf_get_component_versions)
     app.tool(description="Search indexed example PARAM files for matching query text.")(swmf_find_example_params)
     app.tool(description="Trace a PARAM command to definitions and example usages.")(swmf_trace_param_command)
+    app.tool(description="List MCP tool capability contracts for SWMF retrieval tooling.")(swmf_list_retrieve_tool_capabilities)

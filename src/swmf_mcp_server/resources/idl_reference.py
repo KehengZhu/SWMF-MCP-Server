@@ -61,10 +61,20 @@ def register(app: Any) -> None:
     if not hasattr(app, "resource"):
         return
 
-    @app.resource("swmf://idl/procedures")
-    def _idl_procedures_resource() -> dict[str, Any]:
+    @app.resource(
+        "swmf://idl/procedures",
+        name="swmf_idl_procedures",
+        description="List indexed SWMF IDL procedures/macros.",
+        mime_type="application/json",
+    )
+    def idl_procedures_resource() -> dict[str, Any]:
         return list_idl_reference_resource()
 
-    @app.resource("swmf://idl/{procedure}")
-    def _idl_procedure_resource(procedure: str) -> dict[str, Any]:
+    @app.resource(
+        "swmf://idl/{procedure}",
+        name="swmf_idl_procedure",
+        description="Return indexed signature/details for one SWMF IDL procedure.",
+        mime_type="application/json",
+    )
+    def idl_procedure_resource(procedure: str) -> dict[str, Any]:
         return get_idl_reference_resource(procedure)

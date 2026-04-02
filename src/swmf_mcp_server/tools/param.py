@@ -1243,6 +1243,30 @@ def swmf_diagnose_param(
     return with_root(payload, root)
 
 
+def swmf_list_param_tool_capabilities() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "hard_error": False,
+        "authority": "authoritative",
+        "source_kind": "implementation",
+        "source_paths": ["src/swmf_mcp_server/tools/param.py"],
+        "domain": "param",
+        "tools": {
+            "swmf_explain_param": {"description": "Explain a PARAM command using indexed SWMF PARAM.XML sources."},
+            "swmf_validate_param": {"description": "Validate PARAM structure with lightweight deterministic checks."},
+            "swmf_run_testparam": {"description": "Run Scripts/TestParam.pl for authoritative SWMF PARAM validation."},
+            "swmf_validate_external_inputs": {"description": "Validate external file inputs referenced by PARAM content."},
+            "swmf_generate_param_from_template": {
+                "description": "Generate suggested PARAM content from a template kind and context."
+            },
+            "swmf_generate_param_block": {
+                "description": "Backward-compatible alias for generating PARAM content from templates."
+            },
+            "swmf_diagnose_param": {"description": "Diagnose PARAM issues in one call and return prioritized fixes."},
+        },
+    }
+
+
 def register(app: Any) -> None:
     app.tool(description="Explain a PARAM command using indexed SWMF PARAM.XML sources.")(swmf_explain_param)
     app.tool(description="Validate PARAM structure with lightweight deterministic checks.")(swmf_validate_param)
@@ -1251,3 +1275,4 @@ def register(app: Any) -> None:
     app.tool(description="Generate suggested PARAM content from a template kind and context.")(swmf_generate_param_from_template)
     app.tool(description="Backward-compatible alias for generating PARAM content from templates.")(swmf_generate_param_block)
     app.tool(description="Diagnose PARAM issues in one call and return prioritized fixes.")(swmf_diagnose_param)
+    app.tool(description="List MCP tool capability contracts for SWMF PARAM tooling.")(swmf_list_param_tool_capabilities)

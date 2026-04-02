@@ -59,8 +59,30 @@ graph TD
 
 Current package layout:
 
+```mermaid
+---
+config:
+  layout: elk
+  theme: base
+  themeVariables:
+    primaryColor: "#f7f7f7"
+    primaryBorderColor: "#2f2f4a"
+    primaryTextColor: "#2f2f4a"
+    lineColor: "#000000"
+    fontSize: "18px"
+---
+flowchart TB
+    SERVER["server.py"] --> TOOLS["tools/"] & RESOURCES["resources/"] & CORE["core/"]
+    TOOLS --> CORE & CATALOG["catalog/"] & PARSING["parsing/"] & KNOWLEDGE["knowledge/"]
+    RESOURCES --> CORE & CATALOG & PARSING & KNOWLEDGE
+    CATALOG --> CORE & PARSING
+    PARSING --> CORE
+
+    linkStyle default stroke:#000000,stroke-width:2px;
+```
+
 - `src/swmf_mcp_server/server.py`
-  - Registers all tool and resource domains and exposes backwards-compatible tool aliases.
+  - Registers all tool and resource domains and exposes convenience exports for integration tests and scripts.
 - `src/swmf_mcp_server/core/`
   - Shared config, models, authority constants, error payloads, and SWMF root resolution.
 - `src/swmf_mcp_server/catalog/`
@@ -68,11 +90,11 @@ Current package layout:
 - `src/swmf_mcp_server/parsing/`
   - Lightweight PARAM parsing, component map parsing, XML parsing, IDL signature parsing, and external reference extraction.
 - `src/swmf_mcp_server/tools/`
-  - Domain-grouped MCP tool handlers (`configure`, `param`, `build_run`, `postprocess`, `retrieve`, `idl`).
+  - Domain-grouped MCP tool handlers (`configure`, `param`, `build_run`, `postprocess`, `retrieve`, `idl`), registered with `@mcp.tool(description="...")(swmf_...)`.
 - `src/swmf_mcp_server/resources/`
-  - MCP resource handlers for schema, examples, coupling info, and IDL reference views.
+  - MCP resource handlers for schema, examples, coupling info, and IDL reference views, registered with `@mcp.resource("swmf://...")`.
 - `src/swmf_mcp_server/knowledge/`
-  - Curated fallback knowledge used as non-authoritative enrichment.
+  - Curated fallback knowledge used as non-authoritative enrichment when catalog fails.
 
 ## Intro (for those new to MCP)
 
@@ -237,7 +259,7 @@ Representative tool and command sequence:
 * Read local ENVI/IDL instruction files
 * `swmf_show_config`
 * `swmf_list_idl_procedures`
-* `swmf_list_tool_capabilities`
+* `swmf_list_idl_tool_capabilities`
 * shell commands to locate and count matching `IH/z=0_var_3_t*_n*.out` files
 * `swmf_prepare_idl_workflow`
 * `swmf_explain_idl_procedure` for `read_data`, `plot_data`, and `show_data`
@@ -326,7 +348,12 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_trace_param_command`
 - `swmf_prepare_idl_workflow`
 - `swmf_inspect_fits_magnetogram`
-- `swmf_list_tool_capabilities`
+- `swmf_list_configure_tool_capabilities`
+- `swmf_list_param_tool_capabilities`
+- `swmf_list_build_run_tool_capabilities`
+- `swmf_list_postprocess_tool_capabilities`
+- `swmf_list_retrieve_tool_capabilities`
+- `swmf_list_idl_tool_capabilities`
 
 ## Implemented MCP resources
 

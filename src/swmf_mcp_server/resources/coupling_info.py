@@ -71,6 +71,11 @@ def register(app: Any) -> None:
     if not hasattr(app, "resource"):
         return
 
-    @app.resource("swmf://coupling-pairs")
-    def _coupling_resource() -> dict[str, Any]:
+    @app.resource(
+        "swmf://coupling-pairs",
+        name="swmf_coupling_pairs",
+        description="Extract detected SWMF component coupling pairs from CON coupling source.",
+        mime_type="application/json",
+    )
+    def coupling_resource() -> dict[str, Any]:
         return get_coupling_pairs_resource()

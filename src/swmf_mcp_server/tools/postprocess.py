@@ -178,6 +178,22 @@ def swmf_manage_restart(
     )
 
 
+def swmf_list_postprocess_tool_capabilities() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "hard_error": False,
+        "authority": "authoritative",
+        "source_kind": "implementation",
+        "source_paths": ["src/swmf_mcp_server/tools/postprocess.py"],
+        "domain": "postprocess",
+        "tools": {
+            "swmf_postprocess": {"description": "Run or preview SWMF PostProc.pl in the target run directory."},
+            "swmf_manage_restart": {"description": "Run or preview SWMF Restart.pl for restart file management."},
+        },
+    }
+
+
 def register(app: Any) -> None:
     app.tool(description="Run or preview SWMF PostProc.pl in the target run directory.")(swmf_postprocess)
     app.tool(description="Run or preview SWMF Restart.pl for restart file management.")(swmf_manage_restart)
+    app.tool(description="List MCP tool capability contracts for SWMF postprocess tooling.")(swmf_list_postprocess_tool_capabilities)

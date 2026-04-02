@@ -853,13 +853,20 @@ def swmf_inspect_fits_magnetogram(
     return payload
 
 
-def swmf_list_tool_capabilities() -> dict[str, Any]:
+def swmf_list_idl_tool_capabilities() -> dict[str, Any]:
     return {
         "ok": True,
         "hard_error": False,
         "authority": "authoritative",
         "source_kind": "implementation",
-        "source_paths": ["src/swmf_mcp_server/server.py", "src/swmf_mcp_server/tools/idl.py"],
+        "source_paths": [
+            "src/swmf_mcp_server/server.py",
+            "src/swmf_mcp_server/tools/idl.py",
+            "src/swmf_mcp_server/resources/param_schema.py",
+            "src/swmf_mcp_server/resources/examples.py",
+            "src/swmf_mcp_server/resources/coupling_info.py",
+            "src/swmf_mcp_server/resources/idl_reference.py",
+        ],
         "tools": {
             "swmf_prepare_idl_workflow": {
                 "description": "Prepare an IDL workflow script and shell command sequence for SWMF data operations.",
@@ -900,13 +907,40 @@ def swmf_list_tool_capabilities() -> dict[str, Any]:
                 ],
             }
         },
+        "resources": {
+            "swmf://param-schema/{component}": {
+                "description": "Indexed PARAM.XML command metadata for one SWMF component.",
+                "mime_type": "application/json",
+                "template": True,
+            },
+            "swmf://examples/{name}": {
+                "description": "List indexed SWMF PARAM example files filtered by name.",
+                "mime_type": "application/json",
+                "template": True,
+            },
+            "swmf://coupling-pairs": {
+                "description": "Extract detected SWMF component coupling pairs from CON coupling source.",
+                "mime_type": "application/json",
+                "template": False,
+            },
+            "swmf://idl/procedures": {
+                "description": "List indexed SWMF IDL procedures/macros.",
+                "mime_type": "application/json",
+                "template": False,
+            },
+            "swmf://idl/{procedure}": {
+                "description": "Return indexed signature/details for one SWMF IDL procedure.",
+                "mime_type": "application/json",
+                "template": True,
+            },
+        },
     }
 
 
 def register(app: Any) -> None:
     app.tool(description="Prepare an SWMF IDL workflow script and shell command sequence.")(swmf_prepare_idl_workflow)
     app.tool(description="Inspect FITS magnetogram metadata for SC quickrun preparation.")(swmf_inspect_fits_magnetogram)
-    app.tool(description="List MCP tool capability contracts for SWMF IDL tooling.")(swmf_list_tool_capabilities)
+    app.tool(description="List MCP tool capability contracts for SWMF IDL tooling.")(swmf_list_idl_tool_capabilities)
     app.tool(description="List indexed SWMF IDL procedures with optional category filtering.")(swmf_list_idl_procedures)
     app.tool(description="Explain one indexed SWMF IDL procedure and its signature details.")(swmf_explain_idl_procedure)
     app.tool(description="Generate an IDL script payload from task-oriented SWMF inputs.")(swmf_generate_idl_script)
