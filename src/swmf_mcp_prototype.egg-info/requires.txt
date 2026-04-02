@@ -1,8 +1,0 @@
-astropy>=7.2.0
-httpx>=0.28.1
-mcp[cli]<2.0.0,>=1.0.0
-pytest>=9.0.2
-
-[test]
-pytest>=8.2.0
-astropy>=6.0.0

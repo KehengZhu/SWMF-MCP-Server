@@ -200,7 +200,7 @@ See the IDL workflow tool in action, preparing scripts for data visualization an
 			"args": ["-m", "swmf_mcp_server.server"],
 			"cwd": "/absolute/path/to/swmf-mcp-prototype",
 			"env": {
-				"swmf_root": "/absolute/path/to/SWMF"
+				"SWMF_ROOT": "/absolute/path/to/SWMF"
 			}
 		}
 	}
@@ -213,60 +213,67 @@ See the IDL workflow tool in action, preparing scripts for data visualization an
 
 4. Now open Github Copilot and chat. You shall see `swmf-prototype` in `Configure Tools..` menu.
 
-## MCP walkthrough (IDL animation example)
+## MCP walkthrough (IDL plotting example)
 
 Prompt used:
 
 ```text
-Animate U in SC z=0 cuts with swmf-mcp-prototype and save as SC_z=0_U.mp4 video.
+plot the beginning, intermediate and last frames of IH z=0 cut. plot func U. save them as separate images. use swmf-mcp-prototype.
 ```
 
-How MCP works for this request:
+How the assistant handled this request:
 
-1. The AI assistant identifies this as an IDL visualization workflow.
-2. It calls `swmf_list_tool_capabilities` first (capability/"skill" discovery) to confirm:
-   - `swmf_prepare_idl_workflow` supports `task="animate"`
-   - `output_format="mp4"` is supported
-3. It calls `swmf_prepare_idl_workflow` with structured arguments.
-4. The MCP server returns an IDL script plus shell command suggestions.
-5. The AI assistant presents runnable steps and caveats (for example expected output files and run directory).
+1. It first loaded the required ENVI/IDL instruction files so the workflow followed the expected local visualization setup.
+2. It checked SWMF configuration and indexed IDL procedures to understand the available plotting environment.
+3. It inspected the available IH `z=0` cut output files in the run directory.
+4. It identified the first, middle, and last frames from the matching file series.
+5. It tried the higher-level IDL workflow generator first.
+6. When that did not preserve the requested three-frame subset, it fell back to lower-level IDL procedure inspection and an explicit batch script.
+7. It ran the batch script through the MCP IDL runner and generated three separate PNG images.
+8. It verified that the output files existed before reporting success.
 
-Example tool call:
+Representative tool and command sequence:
+
+* Read local ENVI/IDL instruction files
+* `swmf_show_config`
+* `swmf_list_idl_procedures`
+* `swmf_list_tool_capabilities`
+* shell commands to locate and count matching `IH/z=0_var_3_t*_n*.out` files
+* `swmf_prepare_idl_workflow`
+* `swmf_explain_idl_procedure` for `read_data`, `plot_data`, and `show_data`
+* shell inspection of SWMF IDL helper procedures
+* `swmf_generate_idl_script`
+* `swmf_run_idl_batch`
+
+Selected source frames:
+
+* Begin: `IH/z=0_var_3_t00020000_n00005000.out`
+* Intermediate: `IH/z=0_var_3_t00490000_n00008681.out`
+* Last: `IH/z=0_var_3_t00960000_n00011548.out`
+
+Generated image outputs:
+
+* `IH_z0_u_begin.png`
+* `IH_z0_u_middle.png`
+* `IH_z0_u_last.png`
+
+Example `swmf_run_idl_batch` call used for the final successful step:
 
 ```json
 {
-  "tool": "swmf_prepare_idl_workflow",
-  "arguments": {
-    "request": "Animate U in SC z=0 cuts with swmf-mcp-prototype and save as SC_z=0_U.mp4 video.",
-    "task": "animate",
-    "output_pattern": "*z=0*.out",
-    "artifact_name": "SC_z=0_U",
-    "output_format": "mp4",
-    "frame_rate": 10,
-    "preview": false
-  }
+  "working_dir": "/Users/zkeheng/SWMFSoftware/SWMFSOLAR/Run_Max_RP_CME3/run01",
+  "idl_command": "env IDL_PATH=/Users/zkeheng/SWMFSoftware/SWMF/share/IDL/General:${IDL_PATH:-} IDL_STARTUP=idlrc /Applications/NV5/idl92/bin/idl",
+  "timeout_s": 300,
+  "script": "set_default_values\ndoask = 0\nfunc = 'u'\nplotmode = 'contbar'\nplottitle = 'U'\nautorange = 'y'\ntransform = 'none'\n\nfilename = 'IH/z=0_var_3_t00020000_n00005000.out'\nnpict = 1\nset_device, 'IH_z0_u_begin.ps'\nshow_data\nclose_device, /png, /delete\n\nfilename = 'IH/z=0_var_3_t00490000_n00008681.out'\nnpict = 1\nset_device, 'IH_z0_u_middle.ps'\nshow_data\nclose_device, /png, /delete\n\nfilename = 'IH/z=0_var_3_t00960000_n00011548.out'\nnpict = 1\nset_device, 'IH_z0_u_last.ps'\nshow_data\nclose_device, /png, /delete\n\nexit"
 }
 ```
 
-Typical response fields used by the assistant:
+Result:
 
-- `idl_script_filename`
-- `idl_script`
-- `shell_commands`
-- `warnings`
-- `assumptions`
-- `source_paths`
+The assistant completed the request using `swmf-mcp-prototype`, generated the beginning, intermediate, and last IH `z=0` plots for function `U`, and saved each frame as a separate image.
 
-### IDL tools used in this path
+Note: the IDL run emitted non-fatal arithmetic warnings during rendering, but the workflow completed successfully and all three PNG files were produced.
 
-- `swmf_list_tool_capabilities` (discover IDL workflow capabilities before planning)
-- `swmf_prepare_idl_workflow` (prepare deterministic IDL workflow script and command sequence)
-
-Optional follow-up IDL helpers:
-
-- `swmf_inspect_fits_magnetogram` (when FITS-driven solar workflows are requested)
-- `list_idl_procedures` / `explain_idl_procedure` (inspect available SWMF IDL macros)
-- `run_idl_batch` (execute generated IDL scripts in batch mode)
 
 ### How IDL resources are exposed through MCP
 

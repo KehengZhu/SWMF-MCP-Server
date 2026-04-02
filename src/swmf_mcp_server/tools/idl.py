@@ -616,7 +616,7 @@ def prepare_idl_workflow(
     }
 
 
-def list_idl_procedures(
+def swmf_list_idl_procedures(
     category: str | None = None,
     swmf_root: str | None = None,
     run_dir: str | None = None,
@@ -628,7 +628,11 @@ def list_idl_procedures(
 
     catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
     if catalog_error is not None or catalog is None:
-        return catalog_error or failure
+        return catalog_error or failure or {
+            "ok": False,
+            "hard_error": True,
+            "message": "Could not load IDL source catalog.",
+        }
 
     rows = catalog_list_idl_procedures(catalog.idl_procedures, category=category)
     payload = {
@@ -643,7 +647,7 @@ def list_idl_procedures(
     return with_root(payload, root)
 
 
-def explain_idl_procedure(
+def swmf_explain_idl_procedure(
     name: str,
     swmf_root: str | None = None,
     run_dir: str | None = None,
@@ -655,7 +659,11 @@ def explain_idl_procedure(
 
     catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
     if catalog_error is not None or catalog is None:
-        return catalog_error or failure
+        return catalog_error or failure or {
+            "ok": False,
+            "hard_error": True,
+            "message": "Could not load IDL source catalog.",
+        }
 
     payload = get_idl_procedure(catalog.idl_procedures, name=name)
     if payload is None:
@@ -688,7 +696,7 @@ def explain_idl_procedure(
     return with_root(response, root)
 
 
-def generate_idl_script(
+def swmf_generate_idl_script(
     task: str,
     data_files: list[str] | None = None,
     request: str | None = None,
@@ -728,7 +736,7 @@ def generate_idl_script(
     return with_root(payload, root)
 
 
-def run_idl_batch(
+def swmf_run_idl_batch(
     script: str,
     working_dir: str,
     idl_command: str = "idl",
@@ -899,7 +907,7 @@ def register(app: Any) -> None:
     app.tool()(swmf_prepare_idl_workflow)
     app.tool()(swmf_inspect_fits_magnetogram)
     app.tool()(swmf_list_tool_capabilities)
-    app.tool()(list_idl_procedures)
-    app.tool()(explain_idl_procedure)
-    app.tool()(generate_idl_script)
-    app.tool()(run_idl_batch)
+    app.tool()(swmf_list_idl_procedures)
+    app.tool()(swmf_explain_idl_procedure)
+    app.tool()(swmf_generate_idl_script)
+    app.tool()(swmf_run_idl_batch)

@@ -1,1 +1,0 @@
-swmf_mcp_server

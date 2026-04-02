@@ -1,2 +1,0 @@
-[console_scripts]
-swmf-mcp-server = swmf_mcp_server.server:main

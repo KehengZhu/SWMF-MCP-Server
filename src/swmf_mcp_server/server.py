@@ -52,10 +52,10 @@ examples.register(app)
 coupling_info.register(app)
 idl_reference.register(app)
 
-# Backward-compatible alias used by callers/tests.
+# Primary app alias used by callers/tests.
 mcp = app
 
-# Backward-compatible exports for existing integration tests and scripts.
+# Convenience exports for integration tests and scripts.
 swmf_explain_param = param.swmf_explain_param
 swmf_validate_param = param.swmf_validate_param
 swmf_run_testparam = param.swmf_run_testparam
@@ -63,6 +63,10 @@ swmf_prepare_build = build_run.swmf_prepare_build
 swmf_prepare_run = build_run.swmf_prepare_run
 swmf_prepare_idl_workflow = idl.swmf_prepare_idl_workflow
 swmf_list_tool_capabilities = idl.swmf_list_tool_capabilities
+swmf_list_idl_procedures = idl.swmf_list_idl_procedures
+swmf_explain_idl_procedure = idl.swmf_explain_idl_procedure
+swmf_generate_idl_script = idl.swmf_generate_idl_script
+swmf_run_idl_batch = idl.swmf_run_idl_batch
 swmf_prepare_component_config = build_run.swmf_prepare_component_config
 swmf_detect_setup_commands = build_run.swmf_detect_setup_commands
 swmf_apply_setup_commands = build_run.swmf_apply_setup_commands
