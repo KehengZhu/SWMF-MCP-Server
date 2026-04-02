@@ -259,7 +259,6 @@ Representative tool and command sequence:
 * Read local ENVI/IDL instruction files
 * `swmf_show_config`
 * `swmf_list_idl_procedures`
-* `swmf_list_idl_tool_capabilities`
 * shell commands to locate and count matching `IH/z=0_var_3_t*_n*.out` files
 * `swmf_prepare_idl_workflow`
 * `swmf_explain_idl_procedure` for `read_data`, `plot_data`, and `show_data`
@@ -348,12 +347,6 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_trace_param_command`
 - `swmf_prepare_idl_workflow`
 - `swmf_inspect_fits_magnetogram`
-- `swmf_list_configure_tool_capabilities`
-- `swmf_list_param_tool_capabilities`
-- `swmf_list_build_run_tool_capabilities`
-- `swmf_list_postprocess_tool_capabilities`
-- `swmf_list_retrieve_tool_capabilities`
-- `swmf_list_idl_tool_capabilities`
 
 ## Implemented MCP resources
 

@@ -109,30 +109,7 @@ def swmf_set_grid(
     )
 
 
-def swmf_list_configure_tool_capabilities() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "hard_error": False,
-        "authority": "authoritative",
-        "source_kind": "implementation",
-        "source_paths": ["src/swmf_mcp_server/tools/configure.py"],
-        "domain": "configure",
-        "tools": {
-            "swmf_show_config": {
-                "description": "Show resolved SWMF configuration paths and required marker files.",
-            },
-            "swmf_select_components": {
-                "description": "Prepare Config.pl build configuration commands for selected SWMF components.",
-            },
-            "swmf_set_grid": {
-                "description": "Prepare a run layout and #COMPONENTMAP grid/process mapping for PARAM.in.",
-            },
-        },
-    }
-
-
 def register(app: Any) -> None:
     app.tool(description="Show resolved SWMF configuration paths and required marker files.")(swmf_show_config)
     app.tool(description="Prepare Config.pl build configuration commands for selected SWMF components.")(swmf_select_components)
     app.tool(description="Prepare a run layout and #COMPONENTMAP grid/process mapping for PARAM.in.")(swmf_set_grid)
-    app.tool(description="List MCP tool capability contracts for SWMF configure tooling.")(swmf_list_configure_tool_capabilities)
