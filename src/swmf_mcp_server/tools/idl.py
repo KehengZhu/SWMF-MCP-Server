@@ -904,10 +904,10 @@ def swmf_list_tool_capabilities() -> dict[str, Any]:
 
 
 def register(app: Any) -> None:
-    app.tool()(swmf_prepare_idl_workflow)
-    app.tool()(swmf_inspect_fits_magnetogram)
-    app.tool()(swmf_list_tool_capabilities)
-    app.tool()(swmf_list_idl_procedures)
-    app.tool()(swmf_explain_idl_procedure)
-    app.tool()(swmf_generate_idl_script)
-    app.tool()(swmf_run_idl_batch)
+    app.tool(description="Prepare an SWMF IDL workflow script and shell command sequence.")(swmf_prepare_idl_workflow)
+    app.tool(description="Inspect FITS magnetogram metadata for SC quickrun preparation.")(swmf_inspect_fits_magnetogram)
+    app.tool(description="List MCP tool capability contracts for SWMF IDL tooling.")(swmf_list_tool_capabilities)
+    app.tool(description="List indexed SWMF IDL procedures with optional category filtering.")(swmf_list_idl_procedures)
+    app.tool(description="Explain one indexed SWMF IDL procedure and its signature details.")(swmf_explain_idl_procedure)
+    app.tool(description="Generate an IDL script payload from task-oriented SWMF inputs.")(swmf_generate_idl_script)
+    app.tool(description="Run IDL batch script content in a specified working directory.")(swmf_run_idl_batch)

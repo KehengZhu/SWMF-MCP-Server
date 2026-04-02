@@ -179,5 +179,5 @@ def swmf_manage_restart(
 
 
 def register(app: Any) -> None:
-    app.tool()(swmf_postprocess)
-    app.tool()(swmf_manage_restart)
+    app.tool(description="Run or preview SWMF PostProc.pl in the target run directory.")(swmf_postprocess)
+    app.tool(description="Run or preview SWMF Restart.pl for restart file management.")(swmf_manage_restart)

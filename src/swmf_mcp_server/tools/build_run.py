@@ -802,11 +802,11 @@ def swmf_prepare_sc_quickrun_from_magnetogram(
 
 
 def register(app: Any) -> None:
-    app.tool()(swmf_prepare_build)
-    app.tool()(swmf_prepare_component_config)
-    app.tool()(swmf_explain_component_config_fix)
-    app.tool()(swmf_infer_job_layout)
-    app.tool()(swmf_prepare_run)
-    app.tool()(swmf_detect_setup_commands)
-    app.tool()(swmf_apply_setup_commands)
-    app.tool()(swmf_prepare_sc_quickrun_from_magnetogram)
+    app.tool(description="Prepare SWMF build commands from component and compiler selections.")(swmf_prepare_build)
+    app.tool(description="Prepare component configuration guidance from PARAM content.")(swmf_prepare_component_config)
+    app.tool(description="Explain recommended fixes for component-configuration mismatches.")(swmf_explain_component_config_fix)
+    app.tool(description="Infer MPI/job layout settings from job scripts or run context.")(swmf_infer_job_layout)
+    app.tool(description="Prepare SWMF run commands and PARAM snippets from component map inputs.")(swmf_prepare_run)
+    app.tool(description="Detect allowed setup commands embedded in PARAM content.")(swmf_detect_setup_commands)
+    app.tool(description="Apply allowed setup commands within the resolved SWMF root.")(swmf_apply_setup_commands)
+    app.tool(description="Prepare a heuristic SC quickrun plan from a magnetogram FITS file.")(swmf_prepare_sc_quickrun_from_magnetogram)

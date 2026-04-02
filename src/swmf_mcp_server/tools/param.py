@@ -1244,10 +1244,10 @@ def swmf_diagnose_param(
 
 
 def register(app: Any) -> None:
-    app.tool()(swmf_explain_param)
-    app.tool()(swmf_validate_param)
-    app.tool()(swmf_run_testparam)
-    app.tool()(swmf_validate_external_inputs)
-    app.tool()(swmf_generate_param_from_template)
-    app.tool()(swmf_generate_param_block)
-    app.tool()(swmf_diagnose_param)
+    app.tool(description="Explain a PARAM command using indexed SWMF PARAM.XML sources.")(swmf_explain_param)
+    app.tool(description="Validate PARAM structure with lightweight deterministic checks.")(swmf_validate_param)
+    app.tool(description="Run Scripts/TestParam.pl for authoritative SWMF PARAM validation.")(swmf_run_testparam)
+    app.tool(description="Validate external file inputs referenced by PARAM content.")(swmf_validate_external_inputs)
+    app.tool(description="Generate suggested PARAM content from a template kind and context.")(swmf_generate_param_from_template)
+    app.tool(description="Backward-compatible alias for generating PARAM content from templates.")(swmf_generate_param_block)
+    app.tool(description="Diagnose PARAM issues in one call and return prioritized fixes.")(swmf_diagnose_param)

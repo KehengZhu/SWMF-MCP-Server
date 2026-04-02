@@ -190,13 +190,13 @@ See the IDL workflow tool in action, preparing scripts for data visualization an
 ***IDL extension and MCP for VS Code is recommended. Get it from VS Code extension store.***
 
 1. Locate your workspace folder.
-2. Edit `.vscode/mcp.json`. Example MCP server config with `swmf_root`:
+2. Edit `.vscode/mcp.json`. Example MCP server config with `SWMF_ROOT`:
 
 ```json
 {
 	"servers": {
 		"swmf-prototype": {
-			"command": "python",
+			"command": "/absolute/path/to/swmf-mcp-prototype/.venv/bin/python",
 			"args": ["-m", "swmf_mcp_server.server"],
 			"cwd": "/absolute/path/to/swmf-mcp-prototype",
 			"env": {
