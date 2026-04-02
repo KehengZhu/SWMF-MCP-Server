@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from swmf_mcp_server.services.testparam_service import run_testparam
+from swmf_mcp_server.tools.param import run_testparam
 
 
 class _DummyResult:
@@ -36,7 +36,7 @@ def test_run_testparam_uses_swmf_root_as_cwd(monkeypatch, tmp_path: Path) -> Non
         captured["cwd"] = cwd
         return _DummyResult(returncode=0)
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     payload = run_testparam(
         param_path=str(param_path),
@@ -61,7 +61,7 @@ def test_run_testparam_launch_context_failure_classification(monkeypatch, tmp_pa
     def fake_run(cmd, cwd, capture_output, text, check):
         return _DummyResult(returncode=2, stderr=stderr)
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     payload = run_testparam(
         param_path=str(param_path),
@@ -89,7 +89,7 @@ def test_run_testparam_cache_avoids_repeat_execution(monkeypatch, tmp_path: Path
         calls["count"] += 1
         return _DummyResult(returncode=0)
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     first = run_testparam(
         param_path=str(param_path),

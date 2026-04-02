@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from swmf_mcp_server import server
-from swmf_mcp_server.swmf_root import resolve_swmf_root
+from swmf_mcp_server.core.swmf_root import resolve_swmf_root
 
 
 @pytest.fixture()

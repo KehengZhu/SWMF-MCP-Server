@@ -143,7 +143,7 @@ def test_swmf_diagnose_param_prioritizes_launch_context_failure(monkeypatch, tmp
         _ = (cmd, cwd, capture_output, text, check)
         return _DummyResult(returncode=2, stderr="TestParam_ERROR: could not find Config.pl")
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     payload = server.swmf_diagnose_param(
         param_path=str(param_path),
@@ -170,7 +170,7 @@ def test_swmf_diagnose_param_explicit_context_regression(monkeypatch, tmp_path: 
         _ = (cmd, capture_output, text, check)
         return _DummyResult(returncode=0, stdout="")
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     payload = server.swmf_diagnose_param(
         param_path=str(param_path.resolve()),

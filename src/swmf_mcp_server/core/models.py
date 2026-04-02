@@ -44,6 +44,7 @@ class SourceCatalog:
     scripts: list[str]
     idl_macros: list[str]
     source_files: list[str]
+    idl_procedures: dict[str, dict[str, Any]] = field(default_factory=dict)
     resolution_notes: list[str] = field(default_factory=list)
 
 

@@ -72,8 +72,7 @@ def test_swmf_inspect_fits_missing_dependency(monkeypatch: pytest.MonkeyPatch, s
     fake_fits.write_text("not-really-fits", encoding="utf-8")
 
     monkeypatch.setattr(
-        server,
-        "_try_import_astropy_fits",
+        "swmf_mcp_server.tools.idl._try_import_astropy_fits",
         lambda: (None, "Optional dependency 'astropy' is required"),
     )
 

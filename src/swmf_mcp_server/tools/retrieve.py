@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from ..models import SourceCatalog
-from ..sources.template_catalog import find_examples_using_text
-from ..sources.xml_catalog import normalize_command_name
+from typing import Any
+
+from ..catalog import get_source_catalog
+from ..catalog.template_catalog import find_examples_using_text
+from ..catalog.xml_catalog import normalize_command_name
+from ..core.models import SourceCatalog
+from ._helpers import resolve_root_or_failure, with_root
 
 
 def list_available_components(catalog: SourceCatalog) -> dict:
@@ -134,3 +138,92 @@ def trace_param_command(catalog: SourceCatalog, name: str, max_examples: int = 2
         },
         "swmf_root_resolved": catalog.swmf_root,
     }
+
+
+def swmf_list_available_components(
+    swmf_root: str | None = None,
+    run_dir: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    if catalog_error is not None or catalog is None:
+        return catalog_error or failure
+    return with_root(list_available_components(catalog), root)
+
+
+def swmf_find_param_command(
+    name: str,
+    swmf_root: str | None = None,
+    run_dir: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    if catalog_error is not None or catalog is None:
+        return catalog_error or failure
+    return with_root(find_param_command(catalog, name=name), root)
+
+
+def swmf_get_component_versions(
+    component: str | None = None,
+    swmf_root: str | None = None,
+    run_dir: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    if catalog_error is not None or catalog is None:
+        return catalog_error or failure
+    return with_root(get_component_versions(catalog, component=component), root)
+
+
+def swmf_find_example_params(
+    query: str,
+    max_results: int = 30,
+    swmf_root: str | None = None,
+    run_dir: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    if catalog_error is not None or catalog is None:
+        return catalog_error or failure
+    return with_root(find_example_params(catalog, query=query, max_results=max_results), root)
+
+
+def swmf_trace_param_command(
+    name: str,
+    max_examples: int = 20,
+    swmf_root: str | None = None,
+    run_dir: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    if catalog_error is not None or catalog is None:
+        return catalog_error or failure
+    return with_root(trace_param_command(catalog, name=name, max_examples=max_examples), root)
+
+
+def register(app: Any) -> None:
+    app.tool()(swmf_list_available_components)
+    app.tool()(swmf_find_param_command)
+    app.tool()(swmf_get_component_versions)
+    app.tool()(swmf_find_example_params)
+    app.tool()(swmf_trace_param_command)

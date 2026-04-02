@@ -3,11 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from swmf_mcp_server.catalog.catalog_service import CatalogService
-from swmf_mcp_server.discovery.swmf_root import resolve_swmf_root
-from swmf_mcp_server.services.explain_service import explain_param
-from swmf_mcp_server.services.run_service import detect_setup_commands
-from swmf_mcp_server.services.testparam_service import run_testparam
-from swmf_mcp_server.services.validation_service import validate_param
+from swmf_mcp_server.core.swmf_root import resolve_swmf_root
+from swmf_mcp_server.tools.build_run import detect_setup_commands
+from swmf_mcp_server.tools.param import explain_param, run_testparam, validate_param
 
 
 def _make_fake_swmf_root(tmp_path: Path) -> Path:
@@ -77,7 +75,7 @@ def test_testparam_service_uses_authoritative_script(monkeypatch, tmp_path: Path
     def fake_run(*args, **kwargs):
         return DummyResult()
 
-    monkeypatch.setattr("swmf_mcp_server.services.testparam_service.subprocess.run", fake_run)
+    monkeypatch.setattr("swmf_mcp_server.tools.param.subprocess.run", fake_run)
 
     payload = run_testparam(
         param_path=str(param_path),

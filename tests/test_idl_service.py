@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from swmf_mcp_server.services.idl_service import prepare_idl_workflow
+from swmf_mcp_server.tools.idl import prepare_idl_workflow
 
 
 def test_prepare_idl_workflow_animation() -> None:
