@@ -222,12 +222,30 @@ See the IDL workflow tool in action, preparing scripts for data visualization an
 			"args": ["-m", "swmf_mcp_server.server"],
 			"cwd": "/absolute/path/to/swmf-mcp-prototype",
 			"env": {
-				"SWMF_ROOT": "/absolute/path/to/SWMF"
+        "SWMF_ROOT": "/absolute/path/to/SWMF",
+        "SWMF_IDL_EXEC": "/absolute/path/to/idl/executable"
 			}
 		}
 	}
 }
 ```
+
+### Environment Variables
+
+The MCP server/tools currently read these environment variables:
+
+- `SWMF_ROOT`
+  - Used by SWMF root resolution when `swmf_root` tool argument is not provided.
+  - Expected value: absolute path to an SWMF source tree containing `Config.pl`, `PARAM.XML`, and `Scripts/TestParam.pl`.
+
+- `SWMF_IDL_EXEC`
+  - Used by `swmf_run_idl_batch` as the highest-priority IDL executable/command override.
+  - Resolution order in `swmf_run_idl_batch` is: `SWMF_IDL_EXEC` -> `idl_command` argument -> default `idl`.
+  - Expected value: absolute executable path or a shell command resolvable in the selected shell.
+
+- `SHELL`
+  - Used by `swmf_run_idl_batch` to infer the shell when the `shell` argument is omitted.
+  - Default fallback is `/bin/sh` if `SHELL` is unset.
 
 3. Click on "Start" to start SWMF MCP server.
 
@@ -408,6 +426,7 @@ Authoritative validation and semantics still require:
 Path-aware inputs for run-directory workflows:
 - `swmf_root` tool argument
 - `SWMF_ROOT` environment variable
+- `SWMF_IDL_EXEC` environment variable (for IDL batch executable resolution)
 - `run_dir` local heuristics
 
 ## What this prototype is for

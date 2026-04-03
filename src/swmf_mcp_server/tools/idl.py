@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -249,6 +252,15 @@ _IDL_MANUAL_TOPICS = [
 _IDL_TASKS = ["animate", "compare", "transform", "read_log", "plot_log", "plot", "read", "generic"]
 
 _IDL_OUTPUT_FORMATS = ["none", "png", "jpeg", "bmp", "tiff", "ps", "mp4", "mov", "avi"]
+_IDL_EXEC_ENV = "SWMF_IDL_EXEC"
+
+_IDL_BATCH_SHELL_RC_FILES: dict[str, tuple[str, ...]] = {
+    "sh": ("~/.profile",),
+    "bash": ("~/.bashrc", "~/.bash_profile", "~/.profile"),
+    "zsh": ("~/.zshrc", "~/.zprofile", "~/.zshenv"),
+    "csh": ("~/.cshrc", "~/.login"),
+    "tcsh": ("~/.tcshrc", "~/.cshrc", "~/.login"),
+}
 
 
 _PLOT_MODE_TOKENS = [
@@ -287,6 +299,118 @@ def _extract_transform_mode(text: str) -> str | None:
         if re.search(rf"\b{re.escape(key)}\b", text):
             return code
     return None
+
+
+def _normalize_idl_shell(shell: str | None) -> tuple[str | None, str | None]:
+    explicit = shell is not None and shell.strip() != ""
+    if explicit:
+        normalized = Path(shell or "").name.lower()
+    else:
+        normalized = Path(os.environ.get("SHELL", "/bin/sh")).name.lower() or "sh"
+
+    if normalized in _IDL_BATCH_SHELL_RC_FILES:
+        return normalized, None
+
+    if explicit:
+        allowed = ", ".join(sorted(_IDL_BATCH_SHELL_RC_FILES))
+        return None, f"Unsupported shell '{shell}'. Supported shells: {allowed}."
+
+    return "sh", None
+
+
+def _resolve_shell_executable(shell_name: str) -> str | None:
+    shell_path = shutil.which(shell_name)
+    if shell_path:
+        return shell_path
+    if shell_name == "sh" and Path("/bin/sh").is_file():
+        return "/bin/sh"
+    return None
+
+
+def _build_shell_preamble(shell_name: str, load_shell_rc: bool) -> str:
+    if not load_shell_rc:
+        return ""
+
+    rc_files = _IDL_BATCH_SHELL_RC_FILES.get(shell_name, ())
+    if shell_name in {"sh", "bash", "zsh"}:
+        bootstrap = [
+            f'[ -f "{rc_file.replace("~", "$HOME", 1)}" ] && . "{rc_file.replace("~", "$HOME", 1)}"'
+            for rc_file in rc_files
+        ]
+        return "; ".join(bootstrap)
+
+    bootstrap = [
+        f'if ( -f "{rc_file.replace("~", "$HOME", 1)}" ) source "{rc_file.replace("~", "$HOME", 1)}"'
+        for rc_file in rc_files
+    ]
+    return "; ".join(bootstrap)
+
+
+def _build_shell_command(run_part: str, shell_name: str, load_shell_rc: bool) -> str:
+    preamble = _build_shell_preamble(shell_name=shell_name, load_shell_rc=load_shell_rc)
+    if preamble:
+        return f"{preamble}; {run_part}"
+    return run_part
+
+
+def _shell_invocation_prefix(shell_executable: str, shell_name: str) -> list[str]:
+    if shell_name in {"bash", "zsh", "csh", "tcsh"}:
+        return [shell_executable, "-i", "-c"]
+    return [shell_executable, "-c"]
+
+
+def _resolve_idl_command(idl_command: str | None) -> tuple[str, str]:
+    env_command = os.environ.get(_IDL_EXEC_ENV, "").strip()
+    if env_command:
+        return env_command, f"env:{_IDL_EXEC_ENV}"
+
+    requested = (idl_command or "").strip()
+    if requested:
+        return requested, "argument"
+    return "idl", "default"
+
+
+def _extract_lookup_target(command: str) -> str | None:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+
+    if not tokens:
+        return None
+
+    i = 0
+    while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("="):
+        i += 1
+    if i >= len(tokens):
+        return None
+
+    if tokens[i] == "env":
+        i += 1
+        while i < len(tokens):
+            token = tokens[i]
+            if token == "--":
+                i += 1
+                break
+            if token.startswith("-"):
+                i += 1
+                continue
+            if "=" in token and not token.startswith("="):
+                i += 1
+                continue
+            break
+        if i >= len(tokens):
+            return None
+    return tokens[i]
+
+
+def _build_lookup_check_command(lookup_target: str, shell_name: str) -> str:
+    quoted = shlex.quote(lookup_target)
+    if "/" in lookup_target:
+        return f"/bin/test -x {quoted}"
+    if shell_name in {"csh", "tcsh"}:
+        return f"which {quoted} >& /dev/null"
+    return f"command -v {quoted} >/dev/null 2>&1"
 
 
 def _infer_idl_task(request: str, preferred_task: str | None = None) -> dict[str, Any]:
@@ -354,9 +478,16 @@ def _default_pattern_for_visualization(cut_plane: str | None, component: str | N
 def _idl_command_with_env(swmf_root_resolved: str | None, idl_script_filename: str, warnings: list[str]) -> str:
     if swmf_root_resolved:
         idl_general = str(Path(swmf_root_resolved) / "share" / "IDL" / "General")
-        return f'IDL_PATH="{idl_general}:${{IDL_PATH:-}}" IDL_STARTUP=idlrc idl < {idl_script_filename}'
+        return (
+            f"Try running the saved script '{idl_script_filename}' with your normal IDL command first. "
+            "If SWMF routines are missing at runtime, retry with IDL_PATH including "
+            f"'{idl_general}' and IDL_STARTUP=idlrc."
+        )
     warnings.append("Could not resolve SWMF root; IDL_PATH for SWMF macros may need manual setup.")
-    return f"IDL_STARTUP=idlrc idl < {idl_script_filename}"
+    return (
+        f"Try running the saved script '{idl_script_filename}' with your normal IDL command first. "
+        "Only if SWMF routines are missing should you configure IDL_PATH/IDL_STARTUP manually."
+    )
 
 
 def prepare_idl_workflow(
@@ -430,11 +561,15 @@ def prepare_idl_workflow(
 
     idl_script_filename = f"idl_{task}_{export_name}.pro"
     idl_script_lines: list[str] = []
-    shell_commands = [f"cd {resolved_run_dir}"]
+    workflow_hints = [f"Use run_dir_resolved ({resolved_run_dir}) as the working directory."]
     notes = [
         "This tool only prepares commands and script text; nothing is executed.",
         "Run from the directory containing your SWMF output files unless your script uses absolute paths.",
+        "workflow_hints contains workflow guidance (not executable shell commands).",
     ]
+    guidance: list[str] = []
+    requires_clarification = False
+    requires_file_resolution = False
 
     raster_image_formats = {"png", "jpeg", "bmp", "tiff"}
     postscript_formats = {"ps"}
@@ -443,8 +578,13 @@ def prepare_idl_workflow(
     if task == "animate":
         component_for_title = f" in {parsed['component']}" if parsed["component"] else ""
         plot_title = f"{variable.upper()}{component_for_title} {(parsed['cut_plane'] or 'requested cut')} cut"
-        shell_commands.append(f"cat {pattern} > {outs_name}")
+        workflow_hints.append(
+            "Create a combined multi-snapshot .outs file from files matching output_pattern before running animate_data."
+        )
         notes.append("animate_data expects a combined multi-snapshot .outs file.")
+        if output_pattern is None and input_file is None:
+            requires_file_resolution = True
+            guidance.append("Provide output_pattern or input_file so the combined .outs source is explicit.")
         animate_export = "'n'" if export_format == "none" else f"'{export_format}'"
         is_video_export = export_format in {"mp4", "mov", "avi"}
         is_image_export = export_format in {"png", "jpeg", "bmp", "tiff", "ps"}
@@ -485,6 +625,10 @@ def prepare_idl_workflow(
         if is_video_export:
             notes.append("Video export optimization enabled: uses videofile/videorate for animate_data.")
     elif task == "plot":
+        if input_file is None:
+            requires_file_resolution = True
+            guidance.append("Provide input_file to target a concrete dataset instead of the default template value.")
+
         idl_script_lines = [
             f"filename='{data_file}'",
             "read_data",
@@ -507,16 +651,16 @@ def prepare_idl_workflow(
             if export_format in raster_image_formats:
                 warnings.append("SWMF IDL set_device uses a PostScript backend. Non-PS plot exports require conversion from .ps.")
                 notes.append("For plot task, non-PS formats are produced by converting PostScript output.")
-                shell_commands.append(
-                    f"# convert PostScript to {export_format} (example with ImageMagick)"
-                )
-                shell_commands.append(
-                    f"convert -density 300 {ps_file} {export_name}.{export_format}"
+                workflow_hints.append(
+                    f"After plotting, convert '{ps_file}' to '{export_name}.{export_format}' with your preferred PostScript conversion tool."
                 )
             else:
                 notes.append("Plot export for task='plot' writes PostScript output via set_device.")
         notes.append("Adjust func and plotmode as needed for scalar vs vector plotting in the IDL manual.")
     elif task == "read":
+        if input_file is None:
+            requires_file_resolution = True
+            guidance.append("Provide input_file to avoid the default template filename 'example.out'.")
         idl_script_lines = [
             f"filename='{data_file}'",
             "read_data",
@@ -524,6 +668,9 @@ def prepare_idl_workflow(
         ]
         notes.append("read_data can prompt interactively for frame selection when multiple snapshots exist.")
     elif task == "transform":
+        if input_file is None:
+            requires_file_resolution = True
+            guidance.append("Provide input_file to avoid the default template filename 'example.out'.")
         transform_mode = parsed["transform_mode"] or "r"
         idl_script_lines = [
             f"filename='{data_file}'",
@@ -536,6 +683,8 @@ def prepare_idl_workflow(
         ]
         notes.append("For transform='my', compile your custom do_my_transform.pro before read_data.")
     elif task == "compare":
+        requires_file_resolution = True
+        guidance.append("Replace the compare template filename with your two real data files before execution.")
         idl_script_lines = [
             "filename='example1.out example2.out'",
             "read_data",
@@ -547,12 +696,16 @@ def prepare_idl_workflow(
         ]
         notes.append("Update filename with the exact two datasets you want to compare.")
     elif task == "read_log":
+        requires_file_resolution = True
+        guidance.append("Update filename in the script to your actual log file path before execution.")
         idl_script_lines = [
             "filename='run.log'",
             "read_log_data",
         ]
         notes.append("Update filename for your actual SWMF log file path.")
     elif task == "plot_log":
+        requires_file_resolution = True
+        guidance.append("Update filename in the script to your actual log file path before execution.")
         idl_script_lines = [
             "filename='run.log'",
             "read_log_data",
@@ -560,6 +713,14 @@ def prepare_idl_workflow(
         ]
         notes.append("Use plotmode variants for log plotting as described in the IDL manual.")
     else:
+        requires_clarification = True
+        guidance.extend(
+            [
+                "Choose a concrete task (plot, animate, transform, compare, read, read_log, or plot_log).",
+                "Provide an output pattern and/or input file to avoid a generic starter script.",
+                "Use swmf_list_idl_procedures and swmf_explain_idl_procedure for macro-level details before execution.",
+            ]
+        )
         idl_script_lines = [
             "; starter IDL session script",
             "set_default_values",
@@ -567,8 +728,8 @@ def prepare_idl_workflow(
         ]
         notes.append("Request was broad; generated a starter script. Add the specific macro sequence you want.")
 
-    shell_commands.append("# save the returned idl_script text to the returned idl_script_filename")
-    shell_commands.append(_idl_command_with_env(swmf_root_resolved, idl_script_filename, warnings))
+    workflow_hints.append("Save idl_script text to idl_script_filename before manual execution.")
+    workflow_hints.append(_idl_command_with_env(swmf_root_resolved, idl_script_filename, warnings))
 
     return {
         "ok": True,
@@ -603,9 +764,12 @@ def prepare_idl_workflow(
             "artifact_name": export_name,
             "frame_indices": frame_indices,
         },
-        "shell_commands": shell_commands,
+        "workflow_hints": workflow_hints,
         "idl_script_filename": idl_script_filename,
         "idl_script": "\n".join(line for line in idl_script_lines if line),
+        "guided_next_steps": guidance,
+        "requires_clarification": requires_clarification,
+        "requires_file_resolution": requires_file_resolution,
         "notes": notes,
         "assumptions": assumptions,
         "warnings": warnings,
@@ -737,6 +901,8 @@ def swmf_run_idl_batch(
     working_dir: str,
     idl_command: str = "idl",
     timeout_s: int = 120,
+    shell: str | None = None,
+    load_shell_rc: bool = True,
 ) -> dict[str, Any]:
     work_dir = Path(working_dir).expanduser().resolve()
     if not work_dir.is_dir():
@@ -751,12 +917,106 @@ def swmf_run_idl_batch(
         handle.write(script)
         script_path = Path(handle.name)
 
-    command = f"{idl_command} < {script_path.name}"
+    shell_name, shell_error = _normalize_idl_shell(shell)
+    if shell_name is None:
+        return {
+            "ok": False,
+            "hard_error": True,
+            "error_code": "UNSUPPORTED_SHELL",
+            "message": shell_error,
+            "working_dir": str(work_dir),
+            "script_path": str(script_path),
+            "allowed_shells": sorted(_IDL_BATCH_SHELL_RC_FILES),
+        }
+
+    shell_executable = _resolve_shell_executable(shell_name)
+    if shell_executable is None:
+        return {
+            "ok": False,
+            "hard_error": True,
+            "error_code": "SHELL_NOT_FOUND",
+            "message": f"Could not find shell executable for '{shell_name}'.",
+            "working_dir": str(work_dir),
+            "script_path": str(script_path),
+            "shell": shell_name,
+        }
+
+    idl_command_resolved, idl_command_source = _resolve_idl_command(idl_command)
+    lookup_target = _extract_lookup_target(idl_command_resolved)
+    if lookup_target is None:
+        return {
+            "ok": False,
+            "hard_error": True,
+            "error_code": "IDL_COMMAND_INVALID",
+            "message": "Could not parse idl command into an executable target.",
+            "working_dir": str(work_dir),
+            "script_path": str(script_path),
+            "shell": shell_name,
+            "idl_command_requested": idl_command,
+            "idl_command_resolved": idl_command_resolved,
+            "idl_command_source": idl_command_source,
+        }
+
+    shell_prefix = _shell_invocation_prefix(shell_executable=shell_executable, shell_name=shell_name)
+    lookup_check = _build_lookup_check_command(lookup_target=lookup_target, shell_name=shell_name)
+    shell_check_command = _build_shell_command(
+        run_part=lookup_check,
+        shell_name=shell_name,
+        load_shell_rc=load_shell_rc,
+    )
+
+    check_proc = subprocess.run(
+        [*shell_prefix, shell_check_command],
+        cwd=str(work_dir),
+        shell=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if check_proc.returncode != 0:
+        return {
+            "ok": False,
+            "hard_error": False,
+            "error_code": "IDL_COMMAND_NOT_FOUND",
+            "message": (
+                f"Could not resolve IDL executable '{lookup_target}' in shell '{shell_name}' after loading rc files."
+            ),
+            "working_dir": str(work_dir),
+            "script_path": str(script_path),
+            "shell": shell_name,
+            "load_shell_rc": load_shell_rc,
+            "idl_command_requested": idl_command,
+            "idl_command_resolved": idl_command_resolved,
+            "idl_command_source": idl_command_source,
+            "lookup_target": lookup_target,
+            "check_command": shell_check_command,
+            "check_stdout": check_proc.stdout,
+            "check_stderr": check_proc.stderr,
+            "how_to_fix": [
+                f"Set env '{_IDL_EXEC_ENV}' in mcp.json to your IDL executable (absolute path preferred).",
+                "If your setup relies on shell aliases/functions, keep load_shell_rc=true and use shell='zsh' (or your shell).",
+                "You can also pass idl_command explicitly for this invocation.",
+            ],
+            "search_hints": [
+                "Run: command -v idl",
+                "Run: find /Applications -name idl 2>/dev/null | head",
+                "Run: find /opt -name idl 2>/dev/null | head",
+            ],
+        }
+
+    command = f"{idl_command_resolved} < {script_path.name}"
+    shell_command = _build_shell_command(
+        run_part=command,
+        shell_name=shell_name,
+        load_shell_rc=load_shell_rc,
+    )
+
     try:
         proc = subprocess.run(
-            command,
+            [*shell_prefix, shell_command],
             cwd=str(work_dir),
-            shell=True,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=max(1, timeout_s),
@@ -771,6 +1031,12 @@ def swmf_run_idl_batch(
             "working_dir": str(work_dir),
             "script_path": str(script_path),
             "command": command,
+            "shell": shell_name,
+            "shell_command": shell_command,
+            "load_shell_rc": load_shell_rc,
+            "idl_command_resolved": idl_command_resolved,
+            "idl_command_source": idl_command_source,
+            "lookup_target": lookup_target,
         }
     except OSError as exc:
         return {
@@ -781,6 +1047,12 @@ def swmf_run_idl_batch(
             "working_dir": str(work_dir),
             "script_path": str(script_path),
             "command": command,
+            "shell": shell_name,
+            "shell_command": shell_command,
+            "load_shell_rc": load_shell_rc,
+            "idl_command_resolved": idl_command_resolved,
+            "idl_command_source": idl_command_source,
+            "lookup_target": lookup_target,
         }
 
     return {
@@ -789,6 +1061,12 @@ def swmf_run_idl_batch(
         "working_dir": str(work_dir),
         "script_path": str(script_path),
         "command": command,
+        "shell": shell_name,
+        "shell_command": shell_command,
+        "load_shell_rc": load_shell_rc,
+        "idl_command_resolved": idl_command_resolved,
+        "idl_command_source": idl_command_source,
+        "lookup_target": lookup_target,
         "exit_code": proc.returncode,
         "stdout": proc.stdout,
         "stderr": proc.stderr,

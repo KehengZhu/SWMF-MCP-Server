@@ -24,7 +24,8 @@ def test_prepare_idl_workflow_animation() -> None:
     assert "videofile='" in payload["idl_script"]
     assert "videorate=12" in payload["idl_script"]
     assert payload["normalized_inputs"]["task"] == "animate"
-    assert any(command.startswith("cat ") for command in payload["shell_commands"])
+    assert any("combined multi-snapshot .outs" in hint for hint in payload["workflow_hints"])
+    assert any("normal IDL command first" in hint for hint in payload["workflow_hints"])
 
 
 def test_prepare_idl_workflow_transform() -> None:
@@ -127,4 +128,48 @@ def test_prepare_idl_workflow_plot_png_via_postscript_conversion() -> None:
     assert payload["capability"] == "plot"
     assert "set_device,'plot_demo.ps'" in payload["idl_script"]
     assert "SWMF IDL set_device uses a PostScript backend" in " ".join(payload["warnings"])
-    assert any("convert -density 300 plot_demo.ps plot_demo.png" in cmd for cmd in payload["shell_commands"])
+    assert any("convert 'plot_demo.ps' to 'plot_demo.png'" in hint for hint in payload["workflow_hints"])
+
+
+def test_prepare_idl_workflow_generic_returns_guidance() -> None:
+    payload = prepare_idl_workflow(
+        request="help me with idl",
+        swmf_root_resolved=None,
+        run_dir=None,
+        output_pattern=None,
+        input_file=None,
+        artifact_name=None,
+        output_format=None,
+        frame_rate=10,
+        preview=False,
+        frame_indices=None,
+        task=None,
+    )
+
+    assert payload["ok"] is True
+    assert payload["capability"] == "generic"
+    assert payload["requires_clarification"] is True
+    assert payload["guided_next_steps"]
+
+
+def test_prepare_idl_workflow_plot_request_stays_generic() -> None:
+    payload = prepare_idl_workflow(
+        request="plot beginning intermediate and last frames of ih z=0 cut",
+        swmf_root_resolved=None,
+        run_dir=None,
+        output_pattern="IH/z=0_var_3_t*.out",
+        input_file=None,
+        artifact_name="ih_z0_u",
+        output_format="png",
+        frame_rate=10,
+        preview=False,
+        frame_indices=None,
+        task="plot",
+    )
+
+    assert payload["ok"] is True
+    assert payload["capability"] == "plot"
+    assert payload["requires_file_resolution"] is True
+    assert "filename='example.out'" in payload["idl_script"]
+    assert "__FRAME_BEGIN__" not in payload["idl_script"]
+    assert any("Provide input_file" in hint for hint in payload["guided_next_steps"])
