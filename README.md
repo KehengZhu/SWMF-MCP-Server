@@ -72,10 +72,10 @@ config:
     fontSize: "18px"
 ---
 flowchart TB
-    SERVER["server.py"] --> TOOLS["tools/"] & RESOURCES["resources/"] & CORE["core/"]
-    TOOLS --> CORE & CATALOG["catalog/"] & PARSING["parsing/"] & KNOWLEDGE["knowledge/"]
-    RESOURCES --> CORE & CATALOG & PARSING & KNOWLEDGE
-    CATALOG --> CORE & PARSING
+    SERVER["server.py"] --> TOOLS["tools/"] & RESOURCES["resources/"]
+    TOOLS --> CATALOG["catalog/"] & PARSING["parsing/"] & KNOWLEDGE["knowledge/"]
+    RESOURCES --> CATALOG & PARSING & KNOWLEDGE
+    CATALOG --> CORE["core/"] & PARSING
     PARSING --> CORE
 
     linkStyle default stroke:#000000,stroke-width:2px;
@@ -207,6 +207,12 @@ See the IDL workflow tool in action, preparing scripts for data visualization an
 
 [**demo_idl.mp4**](demo/demo_idl.mp4)
 
+### Resources Demo
+
+See how SWMF-resources are used in Github Copilot to explain components.
+
+[**demo_resources.mp4**](demo/demo_resources.mp4)
+
 ## VS Code MCP config
 
 ***IDL extension and MCP for VS Code is recommended. Get it from VS Code extension store.***
@@ -274,7 +280,6 @@ How the assistant handled this request:
 
 Representative tool and command sequence:
 
-* Read local ENVI/IDL instruction files
 * `swmf_show_config`
 * `swmf_list_idl_procedures`
 * shell commands to locate and count matching `IH/z=0_var_3_t*_n*.out` files
