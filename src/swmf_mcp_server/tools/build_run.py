@@ -22,6 +22,106 @@ COMPONENT_VERSION_DEFAULTS: dict[str, str] = {
     "UA": "UA/GITM",
     "EE": "EE/Empty",
 }
+_SWMF_MAKEFILE_BUILD_TARGET_CANDIDATES = (
+    "SWMF",
+    "ALL",
+    "LIB",
+    "NOMPI",
+    "PIDL",
+    "PIONO",
+    "PGITM",
+    "SNAPSHOT",
+    "INTERPOLATE",
+    "EARTH_TRAJ",
+)
+_SWMF_MAKEFILE_RUN_TARGET_CANDIDATES = ("rundir", "rundir_code", "parallelrun", "serialrun")
+_SWMF_MAKEFILE_DEFAULT_VARIABLES = ("CONFIG_PL", "SHELL", "NP", "RUNDIR")
+
+
+def _extract_makefile_assignment(makefile_text: str, variable: str) -> str | None:
+    pattern = rf"(?m)^\s*{re.escape(variable)}\s*[:+?]?=\s*(.+?)\s*$"
+    match = re.search(pattern, makefile_text)
+    if match is None:
+        return None
+    value = match.group(1).split("#", 1)[0].strip()
+    return value or None
+
+
+def _extract_makefile_targets(makefile_text: str) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"(?m)^([A-Za-z][A-Za-z0-9_]*)\s*:", makefile_text):
+        target = match.group(1)
+        if target in seen:
+            continue
+        seen.add(target)
+        targets.append(target)
+    return targets
+
+
+def _discover_swmf_makefile_capabilities(swmf_root_resolved: str | None) -> dict[str, Any]:
+    if swmf_root_resolved is None:
+        return {
+            "detected": False,
+            "makefile_path": None,
+            "capabilities": None,
+            "warnings": ["SWMF root was not provided for Makefile capability discovery."],
+        }
+
+    makefile_path = Path(swmf_root_resolved).expanduser().resolve() / "Makefile"
+    if not makefile_path.is_file():
+        return {
+            "detected": False,
+            "makefile_path": str(makefile_path),
+            "capabilities": None,
+            "warnings": [f"SWMF Makefile was not found at {makefile_path}."],
+        }
+
+    try:
+        makefile_text = makefile_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "detected": False,
+            "makefile_path": str(makefile_path),
+            "capabilities": None,
+            "warnings": [f"Failed to read SWMF Makefile: {exc}"],
+        }
+
+    targets = _extract_makefile_targets(makefile_text)
+    target_set = set(targets)
+    default_variables: dict[str, str] = {}
+    for key in _SWMF_MAKEFILE_DEFAULT_VARIABLES:
+        value = _extract_makefile_assignment(makefile_text, key)
+        if value is not None:
+            default_variables[key.lower()] = value
+
+    build_targets = [target for target in _SWMF_MAKEFILE_BUILD_TARGET_CANDIDATES if target in target_set]
+    run_targets = [target for target in _SWMF_MAKEFILE_RUN_TARGET_CANDIDATES if target in target_set]
+
+    capabilities = {
+        "targets": targets,
+        "build_targets": build_targets,
+        "run_targets": run_targets,
+        "default_variables": default_variables,
+        "is_notparallel": ".NOTPARALLEL" in makefile_text,
+        "supports_machine_variable": "${MACHINE}" in makefile_text,
+        "supports_np_variable": ("np" in default_variables) or ("${NP}" in makefile_text),
+        "supports_rundir_variable": ("rundir" in default_variables) or ("${RUNDIR}" in makefile_text),
+        "has_testparam_reference": "TestParam.pl" in makefile_text,
+    }
+
+    warnings: list[str] = []
+    if "SWMF" not in target_set:
+        warnings.append("SWMF Makefile does not expose the 'SWMF' build target; build recommendation may be incomplete.")
+    if "rundir" not in target_set:
+        warnings.append("SWMF Makefile does not expose 'rundir'; run directory setup suggestions may be generic.")
+
+    return {
+        "detected": True,
+        "makefile_path": str(makefile_path),
+        "capabilities": capabilities,
+        "warnings": warnings,
+    }
 
 
 def _normalize_component_list(components_csv: str) -> list[str]:
@@ -87,7 +187,10 @@ def prepare_build(
     compiler: str | None = None,
     debug: bool = False,
     optimization: int | None = None,
+    swmf_root_resolved: str | None = None,
 ) -> dict[str, Any]:
+    makefile_discovery = _discover_swmf_makefile_capabilities(swmf_root_resolved=swmf_root_resolved)
+
     requested = _normalize_component_list(components_csv)
     if not requested:
         return {
@@ -98,30 +201,62 @@ def prepare_build(
     version_list = ["Empty"] + [item for item in requested if item.lower() != "empty"]
     version_arg = ",".join(version_list)
 
-    commands: list[str] = []
-    commands.append(f"./Config.pl -install -compiler={compiler}" if compiler else "./Config.pl -install")
-    commands.append(f"Config.pl -v={version_arg}")
+    configure_commands: list[str] = []
+    configure_commands.append(f"./Config.pl -install -compiler={compiler}" if compiler else "./Config.pl -install")
+    configure_commands.append(f"Config.pl -v={version_arg}")
 
     if optimization is None:
         optimization = 0 if debug else 4
 
-    commands.append(f"Config.pl {'-debug' if debug else '-nodebug'} -O{optimization}")
-    commands.append("Config.pl -show")
-    commands.append("make -j")
+    configure_commands.append(f"Config.pl {'-debug' if debug else '-nodebug'} -O{optimization}")
+    configure_commands.append("Config.pl -show")
+
+    capabilities = makefile_discovery.get("capabilities")
+    build_targets: list[str] = []
+    if isinstance(capabilities, dict):
+        build_targets = [str(item) for item in capabilities.get("build_targets", [])]
+
+    recommended_make_build_target = "SWMF" if "SWMF" in build_targets else (build_targets[0] if build_targets else None)
+    build_commands = [f"make {recommended_make_build_target}"] if recommended_make_build_target else ["make -j"]
+
+    optional_make_targets: list[str] = []
+    for target in ["ALL", "PIDL", "EARTH_TRAJ", "SNAPSHOT", "INTERPOLATE", "PIONO", "PGITM", "NOMPI"]:
+        if target in build_targets and target != recommended_make_build_target:
+            optional_make_targets.append(f"make {target}")
+
+    commands = [*configure_commands, *build_commands]
+    source_paths: list[str] = []
+    makefile_path = makefile_discovery.get("makefile_path")
+    if isinstance(makefile_path, str) and makefile_path:
+        source_paths.append(makefile_path)
+
+    notes = [
+        "The prototype returns suggested commands only. It does not execute them.",
+        "Putting Empty first follows standard SWMF usage for 'all empty except selected components'.",
+        "After changing compiler flags, a real workflow may also need make clean before recompiling.",
+    ]
+    if isinstance(capabilities, dict) and bool(capabilities.get("is_notparallel")):
+        notes.append("SWMF Makefile declares .NOTPARALLEL, so target-based make invocations are preferred over generic parallel make calls.")
 
     return {
         "ok": True,
         "selected_components": requested,
         "config_pl_v_argument": version_arg,
         "suggested_commands": commands,
+        "command_groups": {
+            "configure": configure_commands,
+            "build": build_commands,
+            "optional_targets": optional_make_targets,
+        },
+        "recommended_make_build_target": recommended_make_build_target,
+        "swmf_makefile_detected": bool(makefile_discovery.get("detected", False)),
+        "swmf_makefile_path": makefile_path,
+        "swmf_makefile_capabilities": capabilities,
+        "warnings": list(makefile_discovery.get("warnings", [])),
         "authority": "heuristic",
         "source_kind": "curated",
-        "source_paths": [],
-        "notes": [
-            "The prototype returns suggested commands only. It does not execute them.",
-            "Putting Empty first follows standard SWMF usage for 'all empty except selected components'.",
-            "After changing compiler flags, a real workflow may also need make clean before recompiling.",
-        ],
+        "source_paths": source_paths,
+        "notes": notes,
     }
 
 
@@ -224,7 +359,10 @@ def prepare_run(
     run_name: str = "run_demo",
     run_dir: str | None = None,
     job_script_path: str | None = None,
+    swmf_root_resolved: str | None = None,
 ) -> dict[str, Any]:
+    makefile_discovery = _discover_swmf_makefile_capabilities(swmf_root_resolved=swmf_root_resolved)
+
     map_rows: list[str] = []
     map_errors: list[str] = []
 
@@ -284,6 +422,45 @@ def prepare_run(
         + "\n\n#END\n"
     )
 
+    capabilities = makefile_discovery.get("capabilities")
+    has_rundir = bool(isinstance(capabilities, dict) and ("rundir" in set(capabilities.get("run_targets", []))))
+    has_serialrun = bool(isinstance(capabilities, dict) and ("serialrun" in set(capabilities.get("run_targets", []))))
+    has_parallelrun = bool(isinstance(capabilities, dict) and ("parallelrun" in set(capabilities.get("run_targets", []))))
+    supports_machine = bool(isinstance(capabilities, dict) and capabilities.get("supports_machine_variable"))
+
+    run_dir_command = "make rundir"
+    if has_rundir and run_name != "run":
+        run_dir_command = f"make rundir RUNDIR={shlex.quote(run_name)}"
+
+    run_param_path = f"{run_name}/PARAM.in"
+    suggested_commands = [
+        run_dir_command,
+        f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_param_path}",
+        f"cd {run_name}",
+    ]
+
+    if not has_rundir and run_name != "run":
+        suggested_commands.insert(1, f"mv run {run_name}")
+    elif has_rundir and run_name == "run":
+        run_param_path = "run/PARAM.in"
+        suggested_commands[1] = f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_param_path}"
+        suggested_commands[2] = "cd run"
+
+    local_execution_commands: list[str] = []
+    if has_serialrun:
+        local_execution_commands.append(f"make serialrun RUNDIR={shlex.quote(run_name)}")
+    if has_parallelrun:
+        local_execution_commands.append(f"make parallelrun NP={nproc} RUNDIR={shlex.quote(run_name)}")
+
+    run_warnings = list(makefile_discovery.get("warnings", []))
+    if has_rundir and not has_serialrun and not has_parallelrun:
+        run_warnings.append("SWMF Makefile provides rundir but not serialrun/parallelrun targets; scheduler execution guidance remains manual.")
+
+    source_paths: list[str] = []
+    makefile_path = makefile_discovery.get("makefile_path")
+    if isinstance(makefile_path, str) and makefile_path:
+        source_paths.append(makefile_path)
+
     return {
         "ok": True,
         "authority": "heuristic",
@@ -296,12 +473,18 @@ def prepare_run(
         "time_accurate": time_accurate,
         "starter_param_in": param_in,
         "testparam_constraint": "TestParam.pl must be run from SWMF_ROOT, not from the run directory.",
-        "suggested_commands": [
-            "make rundir",
-            f"mv run {run_name}",
-            f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_name}/PARAM.in",
-            f"cd {run_name}",
-        ],
+        "suggested_commands": suggested_commands,
+        "command_groups": {
+            "prepare": [suggested_commands[0]],
+            "validate": [suggested_commands[1]],
+            "enter_run_dir": [suggested_commands[-1]],
+            "local_execution": local_execution_commands,
+        },
+        "swmf_makefile_detected": bool(makefile_discovery.get("detected", False)),
+        "swmf_makefile_path": makefile_path,
+        "swmf_makefile_capabilities": capabilities,
+        "local_execution_commands": local_execution_commands,
+        "warnings": run_warnings,
         "testparam_full_command_example": f"cd SWMF_ROOT && ./Scripts/TestParam.pl -n={nproc} $(pwd)/{run_name}/PARAM.in",
         "requires_manual_submission": True,
         "auto_submit_permitted": False,
@@ -310,6 +493,7 @@ def prepare_run(
             "Ensure the script uses SWMF.exe and the intended MPI layout.",
             "Submit manually (example): sbatch job.frontera",
         ],
+        "source_paths": source_paths,
     }
 
 
@@ -470,6 +654,7 @@ def swmf_prepare_build(
             compiler=compiler,
             debug=debug,
             optimization=optimization,
+            swmf_root_resolved=root.swmf_root_resolved,
         ),
         root,
     )
@@ -546,6 +731,7 @@ def swmf_prepare_run(
             run_name=run_name,
             run_dir=run_dir,
             job_script_path=job_script_path,
+            swmf_root_resolved=root.swmf_root_resolved,
         ),
         root,
     )

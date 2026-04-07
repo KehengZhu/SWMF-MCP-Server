@@ -45,6 +45,7 @@ def select_components(
             compiler=compiler,
             debug=debug,
             optimization=optimization,
+            swmf_root_resolved=root.swmf_root_resolved,
         ),
         root,
     )
@@ -66,6 +67,7 @@ def set_grid(
         nproc=nproc,
         run_name=run_name,
         run_dir=run_dir,
+        swmf_root_resolved=root.swmf_root_resolved,
     )
     payload["note"] = "Grid/process layout is represented via #COMPONENTMAP rows in PARAM.in."
     return with_root(payload, root)

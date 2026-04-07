@@ -162,3 +162,135 @@ def test_prepare_sc_quickrun_inferred_nproc(tiny_gong_fits: Path, swmf_root_and_
     assert result["ok"] is True
     assert result["inferred_nproc"] == 56
     assert result["inferred_nproc_source"] == "job_script_inference"
+
+
+def test_prepare_sc_quickrun_enriched_with_swmfsolar_makefile(
+    tiny_gong_fits: Path,
+    swmf_root_and_run_dir: tuple[Path, Path],
+) -> None:
+    root, run_dir = swmf_root_and_run_dir
+    swmfsolar = root.parent / "SWMFSOLAR"
+    (swmfsolar / "Scripts").mkdir(parents=True)
+    (swmfsolar / "Makefile").write_text(
+        "\n".join(
+            [
+                "MODEL = AWSoMR",
+                "MACHINE = frontera",
+                "PFSS = FDIPS",
+                "TIME = MapTime",
+                "MAP = NoMap",
+                "PARAM = Default",
+                "REALIZATIONS = 1,2,3,4,5,6,7,8,9,10,11,12",
+                "POYNTINGFLUX = -1.0",
+                "JOBNAME = amap",
+                "DOINSTALL = T",
+                "",
+                "compile:",
+                "\t@echo compile",
+                "backup_run:",
+                "\t@echo backup",
+                "copy_param:",
+                "\t@echo copy",
+                "rundir_realizations:",
+                "\t@echo rundir",
+                "clean_rundir_tmp:",
+                "\t@echo clean",
+                "run:",
+                "\t@echo run",
+                "adapt_run:",
+                "\t@echo adapt",
+                "rundir_local:",
+                "\t@python Scripts/change_awsom_param.py --map ${MAP} -t ${TIME} -B0 ${PFSS} -p ${POYNTINGFLUX}",
+                "",
+                "# ERROR: MODEL must be either AWSoM, AWSoM2T, AWSoMR or AWSoMR_SOFIE.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = server.swmf_prepare_sc_quickrun_from_magnetogram(
+        fits_path=str(tiny_gong_fits),
+        run_dir=str(run_dir),
+        swmf_root=str(root),
+        mode="sc_steady",
+        nproc=32,
+    )
+
+    assert result["ok"] is True
+    assert result["swmfsolar_makefile_detected"] is True
+    assert result["swmfsolar_root_resolved"] == str(swmfsolar.resolve())
+    assert result["swmfsolar_makefile_path"] == str((swmfsolar / "Makefile").resolve())
+
+    capabilities = result["swmfsolar_makefile_capabilities"]
+    assert "compile" in capabilities["targets"]
+    assert "run" in capabilities["workflow_targets"]
+    assert "AWSoMR_SOFIE" in capabilities["supported_models"]
+    assert capabilities["default_variables"]["pfss"] == "FDIPS"
+
+    vars_payload = result["swmfsolar_recommended_variables"]
+    assert vars_payload["model"] == "AWSoMR"
+    assert vars_payload["pfss"] == "FDIPS"
+    assert vars_payload["simdir"] == run_dir.name
+    assert vars_payload["machine"] == "frontera"
+    assert vars_payload["realizations_expression"] == "1"
+
+    compile_cmd = result["swmfsolar_command_groups"]["compile"][0]
+    assert "make compile" in compile_cmd
+    assert "MODEL=AWSoMR" in compile_cmd
+    adapt_cmd = result["swmfsolar_command_groups"]["adapt_run"][0]
+    assert "make adapt_run" in adapt_cmd
+    assert f"SIMDIR={run_dir.name}" in adapt_cmd
+    assert "MACHINE=frontera" in adapt_cmd
+    assert any("change_awsom_param.py" in cmd for cmd in result["swmfsolar_command_groups"]["prepare"])
+    assert result["recommended_build_steps"] == result["swmfsolar_command_groups"]["compile"]
+    assert result["recommended_run_steps"] == result["swmfsolar_command_groups"]["adapt_run"]
+    assert str((swmfsolar / "Makefile").resolve()) in result["source_paths"]
+
+
+def test_prepare_sc_quickrun_model_simdir_machine_overrides(
+    tiny_gong_fits: Path,
+    swmf_root_and_run_dir: tuple[Path, Path],
+) -> None:
+    root, run_dir = swmf_root_and_run_dir
+    swmfsolar = root.parent / "SWMFSOLAR"
+    (swmfsolar / "Scripts").mkdir(parents=True)
+    (swmfsolar / "Makefile").write_text(
+        "\n".join(
+            [
+                "MODEL = AWSoM",
+                "PFSS = HARMONICS",
+                "TIME = MapTime",
+                "PARAM = Default",
+                "POYNTINGFLUX = -1.0",
+                "JOBNAME = amap",
+                "adapt_run:",
+                "\t@echo adapt",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = server.swmf_prepare_sc_quickrun_from_magnetogram(
+        fits_path=str(tiny_gong_fits),
+        run_dir=str(run_dir),
+        swmf_root=str(root),
+        mode="sc_steady",
+        nproc=32,
+        model="AWSoMR_SOFIE",
+        simdir="Run_Max_SA",
+        machine="frontera",
+    )
+
+    assert result["ok"] is True
+    vars_payload = result["swmfsolar_recommended_variables"]
+    assert vars_payload["model"] == "AWSoMR_SOFIE"
+    assert vars_payload["simdir"] == "Run_Max_SA"
+    assert vars_payload["machine"] == "frontera"
+
+    adapt_cmd = result["swmfsolar_command_groups"]["adapt_run"][0]
+    assert "MODEL=AWSoMR_SOFIE" in adapt_cmd
+    assert "SIMDIR=Run_Max_SA" in adapt_cmd
+    assert "MACHINE=frontera" in adapt_cmd
+    assert result["recommended_run_steps"] == result["swmfsolar_command_groups"]["adapt_run"]

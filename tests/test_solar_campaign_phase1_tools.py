@@ -55,7 +55,20 @@ def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
     swmfsolar = tmp_path / "SWMFSOLAR"
     (swmfsolar / "Scripts").mkdir(parents=True)
     (swmfsolar / "Events").mkdir(parents=True)
-    (swmfsolar / "Makefile").write_text("all:\n\t@echo ok\n", encoding="utf-8")
+    (swmfsolar / "Makefile").write_text(
+        "\n".join(
+            [
+                "MODEL = AWSoM",
+                "MACHINE = frontera",
+                "POYNTINGFLUX = -1.0",
+                "JOBNAME = amap",
+                "adapt_run:",
+                "\t@echo adapt",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     event_path = swmfsolar / "Events" / "param_list.txt"
     event_path.write_text(_EVENT_LIST_TEXT + "\n", encoding="utf-8")
@@ -80,6 +93,15 @@ def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
     assert any("make rundir_realizations" in cmd for cmd in result["runs"][0]["command_groups"]["prepare_shell"])
     assert result["runs"][0]["command_groups"]["submit_shell"]
 
+    adapt_group = result["command_groups"]["adapt_run"]
+    assert len(adapt_group) == 2
+    assert adapt_group[0].startswith("make adapt_run MODEL=AWSoM ")
+    assert "MACHINE=frontera" in adapt_group[0]
+    assert "POYNTINGFLUX=-1.0" in adapt_group[0]
+    assert "JOBNAME=amap" in adapt_group[0]
+    assert "POYNTINGFLUX=5e5" in adapt_group[1]
+    assert result["runs"][0]["command_groups"]["adapt_run_shell"]
+
 
 def test_plan_solar_campaign_without_submit_commands() -> None:
     result = server.swmf_plan_solar_campaign(
@@ -89,4 +111,6 @@ def test_plan_solar_campaign_without_submit_commands() -> None:
 
     assert result["ok"] is True
     assert result["command_groups"]["submit"] == []
+    assert result["command_groups"]["adapt_run"] == []
     assert all(item["command_groups"]["submit_shell"] == [] for item in result["runs"])
+    assert all(item["command_groups"]["adapt_run_shell"] == [] for item in result["runs"])
