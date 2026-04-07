@@ -353,6 +353,7 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_generate_param_from_template`
 - `swmf_generate_param_block`
 - `swmf_diagnose_param`
+- `swmf_diagnose_error`
 - `swmf_prepare_build`
 - `swmf_prepare_component_config`
 - `swmf_explain_component_config_fix`

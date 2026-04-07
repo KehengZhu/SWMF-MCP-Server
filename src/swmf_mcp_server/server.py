@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback for environments without mcp in
             raise RuntimeError("mcp package is required to run the MCP server.")
 
 from .resources import coupling_info, examples, idl_reference, param_schema
-from .tools import build_run, configure, idl, param, postprocess, retrieve
+from .tools import build_run, configure, diagnose, idl, param, postprocess, retrieve
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +40,7 @@ app = FastMCP("swmf-prototype", json_response=True)
 
 # Register tool modules by workflow domain.
 configure.register(app)
+diagnose.register(app)
 param.register(app)
 build_run.register(app)
 postprocess.register(app)
@@ -81,6 +82,7 @@ swmf_get_component_versions = retrieve.swmf_get_component_versions
 swmf_find_example_params = retrieve.swmf_find_example_params
 swmf_trace_param_command = retrieve.swmf_trace_param_command
 swmf_diagnose_param = param.swmf_diagnose_param
+swmf_diagnose_error = diagnose.swmf_diagnose_error
 swmf_plan_restart_from_background = postprocess.swmf_plan_restart_from_background
 
 
