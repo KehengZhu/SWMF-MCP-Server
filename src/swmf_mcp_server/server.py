@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback for environments without mcp in
             raise RuntimeError("mcp package is required to run the MCP server.")
 
 from .resources import coupling_info, examples, idl_reference, param_schema
-from .tools import build_run, configure, diagnose, idl, param, postprocess, retrieve
+from .tools import build_run, configure, diagnose, idl, param, postprocess, retrieve, solar_campaign
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,7 @@ build_run.register(app)
 postprocess.register(app)
 retrieve.register(app)
 idl.register(app)
+solar_campaign.register(app)
 
 # Register MCP resources.
 param_schema.register(app)
@@ -73,7 +74,7 @@ swmf_apply_setup_commands = build_run.swmf_apply_setup_commands
 swmf_infer_job_layout = build_run.swmf_infer_job_layout
 swmf_inspect_fits_magnetogram = idl.swmf_inspect_fits_magnetogram
 swmf_generate_param_from_template = param.swmf_generate_param_from_template
-swmf_prepare_sc_quickrun_from_magnetogram = build_run.swmf_prepare_sc_quickrun_from_magnetogram
+swmf_prepare_sc_quickrun_from_magnetogram = solar_campaign.swmf_prepare_solar_quickrun_from_magnetogram
 swmf_validate_external_inputs = param.swmf_validate_external_inputs
 swmf_explain_component_config_fix = build_run.swmf_explain_component_config_fix
 swmf_list_available_components = retrieve.swmf_list_available_components
@@ -84,6 +85,8 @@ swmf_trace_param_command = retrieve.swmf_trace_param_command
 swmf_diagnose_param = param.swmf_diagnose_param
 swmf_diagnose_error = diagnose.swmf_diagnose_error
 swmf_plan_restart_from_background = postprocess.swmf_plan_restart_from_background
+swmf_parse_solar_event_list = solar_campaign.swmf_parse_solar_event_list
+swmf_plan_solar_campaign = solar_campaign.swmf_plan_solar_campaign
 
 
 def main() -> None:

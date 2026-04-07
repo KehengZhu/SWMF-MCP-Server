@@ -343,17 +343,11 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 
 ## Implemented MCP tools
 
+### Configuration & Build Domain
+
 - `swmf_show_config`
 - `swmf_select_components`
 - `swmf_set_grid`
-- `swmf_explain_param`
-- `swmf_validate_param`
-- `swmf_run_testparam`
-- `swmf_validate_external_inputs`
-- `swmf_generate_param_from_template`
-- `swmf_generate_param_block`
-- `swmf_diagnose_param`
-- `swmf_diagnose_error`
 - `swmf_prepare_build`
 - `swmf_prepare_component_config`
 - `swmf_explain_component_config_fix`
@@ -361,17 +355,45 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_prepare_run`
 - `swmf_detect_setup_commands`
 - `swmf_apply_setup_commands`
+
+### Parameter Validation & Generation Domain
+
+- `swmf_explain_param`
+- `swmf_validate_param`
+- `swmf_run_testparam`
+- `swmf_validate_external_inputs`
+- `swmf_generate_param_from_template`
+- `swmf_generate_param_block`
+- `swmf_diagnose_param`
+
+### Solar Campaign Domain
+
 - `swmf_prepare_sc_quickrun_from_magnetogram`
+- `swmf_parse_solar_event_list`
+- `swmf_plan_solar_campaign`
+
+### IDL & Visualization Domain
+
+- `swmf_prepare_idl_workflow`
+- `swmf_inspect_fits_magnetogram`
+
+### Post-processing & Restart Domain
+
 - `swmf_postprocess`
 - `swmf_manage_restart`
 - `swmf_plan_restart_from_background`
+
+### Discovery & Reference Domain
+
 - `swmf_list_available_components`
 - `swmf_find_param_command`
 - `swmf_get_component_versions`
 - `swmf_find_example_params`
 - `swmf_trace_param_command`
-- `swmf_prepare_idl_workflow`
-- `swmf_inspect_fits_magnetogram`
+
+### Diagnostics Domain
+
+- `swmf_diagnose_error`
 
 ## Implemented MCP resources
 
@@ -380,6 +402,37 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf://coupling-pairs`
 - `swmf://idl/procedures`
 - `swmf://idl/{procedure}`
+
+## Solar Campaign Workflows
+
+The MCP server supports planning and orchestrating multi-run solar campaign simulations via SWMFSOLAR integration.
+
+### Phase 1: Solar Campaign Parsing and Planning (Implemented)
+
+Two tools enable dry-run planning of SWMFSOLAR event-driven campaigns without execution:
+
+- `swmf_parse_solar_event_list`: Parses SWMFSOLAR event-list files into normalized campaign specifications
+  - Extracts selected run IDs with optional override
+  - Normalizes parameter mutations (add/rm/replace/change semantics)
+  - Infers realization counts by map family (ADAPT→12, GONG→1, etc.)
+  - Returns structured campaign spec with model, map, and mutation metadata
+
+- `swmf_plan_solar_campaign`: Generates dry-run campaign plans with Makefile command preview
+  - Expands realizations and generates per-run simulation directories (naming: `run{id:03d}_{model}`)
+  - Groups commands into compile/prepare/submit phases
+  - Provides full command preview without execution
+  - Detects SWMFSOLAR root and resolves paths
+  - Returns `requires_manual_execution=true` for safety
+
+Example workflow:
+
+```text
+1. Load event-list file or inline text describing solar events (CME, flare onset times, maps)
+2. Call swmf_parse_solar_event_list to validate and normalize entries
+3. Call swmf_plan_solar_campaign to preview compile/prepare/run commands
+4. Review dry-run plan for correctness
+5. (Future Phase 2) Execute the campaign with swmf_execute_solar_campaign if approved
+```
 
 ## Source Of Truth Policy
 
