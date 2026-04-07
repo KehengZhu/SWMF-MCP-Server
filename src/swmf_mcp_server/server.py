@@ -81,6 +81,7 @@ swmf_get_component_versions = retrieve.swmf_get_component_versions
 swmf_find_example_params = retrieve.swmf_find_example_params
 swmf_trace_param_command = retrieve.swmf_trace_param_command
 swmf_diagnose_param = param.swmf_diagnose_param
+swmf_plan_restart_from_background = postprocess.swmf_plan_restart_from_background
 
 
 def main() -> None:

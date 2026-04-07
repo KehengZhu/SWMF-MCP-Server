@@ -363,6 +363,7 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_prepare_sc_quickrun_from_magnetogram`
 - `swmf_postprocess`
 - `swmf_manage_restart`
+- `swmf_plan_restart_from_background`
 - `swmf_list_available_components`
 - `swmf_find_param_command`
 - `swmf_get_component_versions`
