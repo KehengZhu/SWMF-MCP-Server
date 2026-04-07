@@ -502,6 +502,8 @@ def run_testparam(
             "message": param_error or "Invalid param_path.",
             "execution_context_ok": False,
             "execution_cwd": execution_cwd,
+            "execution_constraint": "TestParam.pl must be executed from SWMF_ROOT directory.",
+            "execution_hint": f"cd {execution_cwd} && ./Scripts/TestParam.pl -n=<nproc> {resolved_param_path}",
             "authority": "authoritative",
             "source_kind": "TestParam.pl",
             "source_paths": [],
@@ -516,6 +518,8 @@ def run_testparam(
             "message": f"Could not find Scripts/TestParam.pl under resolved SWMF root: {testparam_script}",
             "execution_context_ok": False,
             "execution_cwd": execution_cwd,
+            "execution_constraint": "TestParam.pl must be executed from SWMF_ROOT directory.",
+            "execution_hint": f"Ensure {testparam_script} exists. Then: cd {execution_cwd} && ./Scripts/TestParam.pl -n=<nproc> {resolved_param_path}",
             "authority": "authoritative",
             "source_kind": "TestParam.pl",
             "source_paths": [],
@@ -543,6 +547,7 @@ def run_testparam(
                     "job_layout": layout_result,
                     "execution_context_ok": False,
                     "execution_cwd": execution_cwd,
+                    "execution_constraint": "TestParam.pl must be executed from SWMF_ROOT directory.",
                     "authority": "authoritative",
                     "source_kind": "TestParam.pl",
                     "source_paths": [str(testparam_script)],
@@ -567,6 +572,8 @@ def run_testparam(
             "message": f"Failed to execute TestParam.pl: {exc}",
             "execution_context_ok": False,
             "execution_cwd": execution_cwd,
+            "execution_constraint": "TestParam.pl must be executed from SWMF_ROOT directory.",
+            "execution_hint": f"cd {execution_cwd} && ./Scripts/TestParam.pl -n={nproc} {resolved_param_path}",
             "authority": "authoritative",
             "source_kind": "TestParam.pl",
             "source_paths": [str(testparam_script)],
@@ -618,6 +625,8 @@ def run_testparam(
         "source_paths": [str(testparam_script)],
         "run_dir_resolved": str(resolved_run_dir),
         "execution_cwd": execution_cwd,
+        "execution_constraint": "TestParam.pl must be executed from SWMF_ROOT directory.",
+        "execution_hint": f"cd {execution_cwd} && ./Scripts/TestParam.pl -n={nproc} {resolved_param_path}",
         "param_path_resolved": str(resolved_param_path),
         "command": " ".join(cmd),
         "nproc_used": nproc,
@@ -1246,7 +1255,7 @@ def swmf_diagnose_param(
 def register(app: Any) -> None:
     app.tool(description="Explain a PARAM command using indexed SWMF PARAM.XML sources.")(swmf_explain_param)
     app.tool(description="Validate PARAM structure with lightweight deterministic checks.")(swmf_validate_param)
-    app.tool(description="Run Scripts/TestParam.pl for authoritative SWMF PARAM validation.")(swmf_run_testparam)
+    app.tool(description="Run Scripts/TestParam.pl for authoritative SWMF PARAM validation. CONSTRAINT: Must execute from SWMF_ROOT directory. Command format: cd SWMF_ROOT && ./Scripts/TestParam.pl -n=<nproc> <PARAM.in>.")(swmf_run_testparam)
     app.tool(description="Validate external file inputs referenced by PARAM content.")(swmf_validate_external_inputs)
     app.tool(description="Generate suggested PARAM content from a template kind and context.")(swmf_generate_param_from_template)
     app.tool(description="Backward-compatible alias for generating PARAM content from templates.")(swmf_generate_param_block)

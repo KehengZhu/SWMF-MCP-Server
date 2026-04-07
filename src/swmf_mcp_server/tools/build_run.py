@@ -295,12 +295,14 @@ def prepare_run(
         "run_name": run_name,
         "time_accurate": time_accurate,
         "starter_param_in": param_in,
+        "testparam_constraint": "TestParam.pl must be run from SWMF_ROOT, not from the run directory.",
         "suggested_commands": [
             "make rundir",
             f"mv run {run_name}",
-            f"Scripts/TestParam.pl -n={nproc} {run_name}/PARAM.in",
+            f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_name}/PARAM.in",
             f"cd {run_name}",
         ],
+        "testparam_full_command_example": f"cd SWMF_ROOT && ./Scripts/TestParam.pl -n={nproc} $(pwd)/{run_name}/PARAM.in",
         "requires_manual_submission": True,
         "auto_submit_permitted": False,
         "suggested_manual_submission": [

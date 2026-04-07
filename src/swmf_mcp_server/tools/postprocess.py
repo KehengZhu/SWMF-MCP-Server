@@ -362,11 +362,11 @@ def plan_restart_from_background(
             elif nproc_used is None:
                 warnings.append("Could not infer nproc from job scripts; using placeholder in validation command.")
                 validate_group.append(
-                    f"perl {shlex.quote(str(testparam_script))} -n=<YOUR_NPROC> {shlex.quote(str(resolved_param))}"
+                    f"cd {str(resolved_root)} && perl ./Scripts/TestParam.pl -n=<YOUR_NPROC> {shlex.quote(str(resolved_param))}"
                 )
             else:
                 validate_group.append(
-                    f"perl {shlex.quote(str(testparam_script))} -n={nproc_used} {shlex.quote(str(resolved_param))}"
+                    f"cd {str(resolved_root)} && perl ./Scripts/TestParam.pl -n={nproc_used} {shlex.quote(str(resolved_param))}"
                 )
 
     scheduler_resolved = hint
@@ -391,6 +391,8 @@ def plan_restart_from_background(
         "message": "Generated restart/validation/submit preview commands. Nothing was executed.",
         "run_dir_resolved": str(resolved_run_dir),
         "background_restart_resolved": str(resolved_background_restart),
+        "testparam_constraint": "TestParam.pl validation commands must be run from SWMF_ROOT directory.",
+        "testparam_execution_note": f"Run TestParam.pl from within SWMF_ROOT: cd {str(resolved_root)} && ./Scripts/TestParam.pl -n=<nproc> <PARAM.in>",
         "preflight_checks": preflight,
         "command_preview": command_preview,
         "command_groups": {
