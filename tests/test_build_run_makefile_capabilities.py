@@ -121,3 +121,20 @@ def test_prepare_run_enriched_by_swmf_makefile(tmp_path: Path) -> None:
     assert "environment_prerequisites" in result
     assert str((root / "Config.pl").resolve()) in result["source_paths"]
     assert str((root / "Makefile").resolve()) in result["source_paths"]
+
+
+def test_infer_job_layout_missing_script_returns_path_hints(tmp_path: Path) -> None:
+    root = _make_fake_swmf_root_with_makefile(tmp_path)
+    run_dir = root / "runs" / "demo"
+    run_dir.mkdir(parents=True)
+
+    result = server.swmf_infer_job_layout(
+        job_script_path="missing.job",
+        run_dir=str(run_dir),
+        swmf_root=str(root),
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "JOB_SCRIPT_NOT_FOUND"
+    assert result["path_search_hints"]
+    assert "path_search_candidates" in result

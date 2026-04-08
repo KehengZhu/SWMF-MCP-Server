@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..core.common import resolve_run_dir
+from ..core.common import build_path_search_guidance as _build_path_search_guidance, resolve_run_dir
 from ..parsing.job_layout import find_likely_job_scripts, infer_job_layout_from_script
 from ._helpers import resolve_root_or_failure, with_root
 
@@ -109,85 +109,6 @@ def _dedupe_preserve(items: list[str]) -> list[str]:
         seen.add(item)
         result.append(item)
     return result
-
-
-def _find_path_search_candidates(
-    search_roots: list[Path],
-    expected_entries: list[str],
-    max_depth: int = 2,
-    max_results: int = 12,
-) -> list[str]:
-    expected = {item for item in expected_entries if item}
-    if not expected:
-        return []
-
-    candidates: list[str] = []
-    seen_candidates: set[str] = set()
-
-    for raw_root in search_roots:
-        root = raw_root if raw_root.is_dir() else raw_root.parent
-        if not root.exists() or not root.is_dir():
-            continue
-
-        queue: list[tuple[Path, int]] = [(root.resolve(), 0)]
-        seen_dirs: set[Path] = set()
-
-        while queue and len(candidates) < max_results:
-            current, depth = queue.pop(0)
-            if current in seen_dirs:
-                continue
-            seen_dirs.add(current)
-
-            try:
-                children = list(current.iterdir())
-            except OSError:
-                continue
-
-            child_names = {item.name for item in children}
-            if child_names.intersection(expected):
-                current_text = str(current)
-                if current_text not in seen_candidates:
-                    seen_candidates.add(current_text)
-                    candidates.append(current_text)
-
-            if depth >= max_depth:
-                continue
-
-            subdirs = sorted((item for item in children if item.is_dir()), key=lambda item: item.name)
-            for subdir in subdirs:
-                queue.append((subdir.resolve(), depth + 1))
-
-            if len(candidates) >= max_results:
-                break
-
-    return candidates
-
-
-def _build_path_search_guidance(
-    path_role: str,
-    search_roots: list[Path],
-    expected_entries: list[str],
-) -> dict[str, Any]:
-    expected = [entry for entry in expected_entries if entry]
-    expected_text = ", ".join(expected) if expected else "the expected run artifacts"
-    roots = _dedupe_preserve(
-        [
-            str((root if root.is_dir() else root.parent).resolve())
-            for root in search_roots
-            if (root if root.is_dir() else root.parent).exists()
-        ]
-    )
-    candidates = _find_path_search_candidates(search_roots=search_roots, expected_entries=expected)
-
-    return {
-        "path_search_hints": [
-            f"Verify {path_role} points to the directory that directly contains {expected_text}.",
-            "If lookup fails, inspect child directories first, then parent and sibling directories, and retry with the corrected path.",
-            "When uncertain, run a file search for marker files/directories and pass the discovered path back into the tool input.",
-        ],
-        "path_search_roots": roots,
-        "path_search_candidates": candidates,
-    }
 
 
 def _resolve_related_script(run_dir: Path, swmf_root: Path, script_ref: str) -> Path | None:
@@ -719,6 +640,7 @@ def plan_restart_from_background(
             path_role="run_dir",
             search_roots=[resolved_run_dir, resolved_run_dir.parent],
             expected_entries=["PARAM.in", "RESTART.in", "RESTART", "job.long"],
+            keyword_hints=[resolved_run_dir.name, "run", "restart", "param", "job"],
         )
         return with_root(
             {
@@ -744,6 +666,7 @@ def plan_restart_from_background(
             path_role="run_dir/swmf_root for Restart.pl",
             search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
             expected_entries=["Restart.pl", "Scripts", "share"],
+            keyword_hints=["restart", "scripts", "swmf", resolved_run_dir.name],
         )
         return with_root(
             {
@@ -769,6 +692,7 @@ def plan_restart_from_background(
             path_role="background_results_dir/restart_subdir",
             search_roots=[resolved_background_dir, resolved_background_dir.parent, resolved_run_dir],
             expected_entries=[restart_subdir, "RESTART", "restart"],
+            keyword_hints=[restart_subdir, "restart", "results", "background"],
         )
         return with_root(
             {
@@ -1003,6 +927,7 @@ def plan_restart_from_background(
                 path_role="param_path",
                 search_roots=[resolved_run_dir, resolved_run_dir.parent],
                 expected_entries=[Path(param_input).name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
+                keyword_hints=[Path(param_input).name, "param", "restart", "input"],
             )
         )
 
@@ -1076,6 +1001,7 @@ def plan_postprocess(
             path_role="run_dir/swmf_root for PostProc.pl",
             search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
             expected_entries=["PostProc.pl", "Scripts", "share"],
+            keyword_hints=["postproc", "postprocess", "scripts", resolved_run_dir.name],
         )
         return with_root(
             {
@@ -1258,6 +1184,7 @@ def plan_resubmit(
             path_role="run_dir/swmf_root for Resubmit.pl",
             search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
             expected_entries=["Resubmit.pl", "Scripts", "share"],
+            keyword_hints=["resubmit", "scripts", "job", resolved_run_dir.name],
         )
         return with_root(
             {
@@ -1283,6 +1210,7 @@ def plan_resubmit(
             path_role="job_script",
             search_roots=[resolved_run_dir, resolved_run_dir.parent],
             expected_entries=[Path(job_script).name, "job.long", "job.slurm", "job.pbs", "job.frontera"],
+            keyword_hints=[Path(job_script).name, "job", "scheduler", "submit"],
         )
         return with_root(
             {
@@ -1431,6 +1359,7 @@ def postprocess(
             path_role="run_dir/swmf_root for PostProc.pl",
             search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
             expected_entries=["PostProc.pl", "Scripts", "share"],
+            keyword_hints=["postproc", "postprocess", "scripts", resolved_run_dir.name],
         )
         return with_root(
             {
@@ -1476,6 +1405,7 @@ def manage_restart(
             path_role="run_dir/swmf_root for Restart.pl",
             search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
             expected_entries=["Restart.pl", "Scripts", "share"],
+            keyword_hints=["restart", "scripts", "job", resolved_run_dir.name],
         )
         return with_root(
             {

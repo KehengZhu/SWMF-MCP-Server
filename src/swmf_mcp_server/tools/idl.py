@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog import get_idl_procedure, get_source_catalog, list_idl_procedures as catalog_list_idl_procedures
-from ..core.common import resolve_input_path, resolve_run_dir
+from ..core.common import build_path_search_guidance, resolve_input_path, resolve_run_dir
 from ._helpers import resolve_root_or_failure, with_root
 
 
@@ -93,6 +93,18 @@ def inspect_fits_magnetogram(
 ) -> dict:
     resolved, path_error = resolve_input_path(fits_path, run_dir=run_dir)
     if path_error is not None or resolved is None:
+        base_dir = resolve_run_dir(run_dir)
+        requested_path = Path(fits_path).expanduser()
+        search_roots = [base_dir, base_dir.parent]
+        if requested_path.is_absolute():
+            search_roots.append(requested_path.parent)
+        expected_entries = [requested_path.name or "magnetogram.fits", "input", "IMF", "Results"]
+        path_guidance = build_path_search_guidance(
+            path_role="fits_path",
+            search_roots=search_roots,
+            expected_entries=expected_entries,
+            keyword_hints=[requested_path.name, "fits", "magnetogram", "input", "imf"],
+        )
         return {
             "ok": False,
             "hard_error": True,
@@ -100,6 +112,7 @@ def inspect_fits_magnetogram(
             "fits_path_resolved": str(resolved) if resolved else None,
             "warnings": [],
             "suggested_next_tool": None,
+            **path_guidance,
         }
 
     fits_mod, dep_error = importer() if importer is not None else _try_import_astropy_fits()
@@ -1218,11 +1231,18 @@ def swmf_run_idl_batch(
 ) -> dict[str, Any]:
     work_dir = Path(working_dir).expanduser().resolve()
     if not work_dir.is_dir():
+        path_guidance = build_path_search_guidance(
+            path_role="working_dir",
+            search_roots=[work_dir, work_dir.parent, Path.cwd()],
+            expected_entries=["PARAM.in", "job.long", "run.log", "SWMF.exe"],
+            keyword_hints=[work_dir.name, "run", "results", "job", "param"],
+        )
         return {
             "ok": False,
             "hard_error": True,
             "error_code": "WORKING_DIR_NOT_FOUND",
             "message": f"working_dir is not a directory: {work_dir}",
+            **path_guidance,
         }
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pro", prefix="mcp_idl_", dir=str(work_dir), delete=False, encoding="utf-8") as handle:

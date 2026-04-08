@@ -51,6 +51,18 @@ def test_parse_solar_event_list_selected_override() -> None:
     assert result["selected_runs"][0]["realizations"] == [1, 2, 3]
 
 
+def test_parse_solar_event_list_missing_path_returns_path_hints(tmp_path: Path) -> None:
+    result = server.swmf_parse_solar_event_list(
+        event_list_path=str(tmp_path / "missing_param_list.txt"),
+        run_dir=str(tmp_path),
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "EVENT_LIST_LOAD_FAILED"
+    assert result["path_search_hints"]
+    assert "path_search_roots" in result
+
+
 def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
     swmfsolar = tmp_path / "SWMFSOLAR"
     (swmfsolar / "Scripts").mkdir(parents=True)

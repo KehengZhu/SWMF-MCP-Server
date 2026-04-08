@@ -6,7 +6,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from ..core.common import resolve_run_dir
+from ..core.common import build_path_search_guidance, resolve_run_dir
 
 
 _SUPPORTED_MODELS = {"AWSoM", "AWSoM2T", "AWSoMR", "AWSoMR_SOFIE"}
@@ -377,6 +377,25 @@ def parse_solar_event_list(
         run_dir=run_dir,
     )
     if load_error is not None or loaded_text is None:
+        search_roots = [resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent]
+        expected_entries = ["param_list.txt", "Events", "SWMFSOLAR"]
+        if event_list_path is not None:
+            requested = Path(event_list_path).expanduser()
+            requested_name = requested.name
+            if requested_name:
+                expected_entries.insert(0, requested_name)
+            if requested.is_absolute():
+                search_roots.append(requested.parent)
+        if resolved_path is not None:
+            resolved = Path(resolved_path)
+            search_roots.append(resolved.parent)
+
+        path_guidance = build_path_search_guidance(
+            path_role="event_list_path",
+            search_roots=search_roots,
+            expected_entries=expected_entries,
+            keyword_hints=["event", "events", "param_list", "swmfsolar", *( [requested_name] if event_list_path is not None and requested_name else [] )],
+        )
         return {
             "ok": False,
             "hard_error": True,
@@ -387,6 +406,7 @@ def parse_solar_event_list(
                 "Pass event_list_text directly.",
                 "Or pass event_list_path to an existing event list file.",
             ],
+            **path_guidance,
         }
 
     payload = _parse_event_list_text(

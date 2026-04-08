@@ -136,3 +136,16 @@ def test_run_idl_batch_rejects_unsupported_shell(tmp_path) -> None:
     assert payload["ok"] is False
     assert payload["error_code"] == "UNSUPPORTED_SHELL"
     assert "Supported shells" in payload["message"]
+
+
+def test_run_idl_batch_missing_working_dir_returns_path_hints(tmp_path) -> None:
+    payload = idl_tools.swmf_run_idl_batch(
+        script="print, 6\n",
+        working_dir=str(tmp_path / "missing_workdir"),
+        shell="zsh",
+    )
+
+    assert payload["ok"] is False
+    assert payload["error_code"] == "WORKING_DIR_NOT_FOUND"
+    assert payload["path_search_hints"]
+    assert "path_search_candidates" in payload

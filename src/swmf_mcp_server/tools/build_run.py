@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..core.common import load_param_text, resolve_run_dir
+from ..core.common import build_path_search_guidance, load_param_text, resolve_run_dir
 from ..parsing.component_map import COMPONENTMAP_ROW
 from ..parsing.job_layout import find_likely_job_scripts, infer_job_layout_from_script
 from ..parsing.param_parser import parse_param_text
@@ -557,20 +557,34 @@ def infer_job_layout(job_script_path: str | None = None, run_dir: str | None = N
             script_path = resolved_run_dir / script_path
         script_path = script_path.resolve()
         if not script_path.is_file():
+            path_guidance = build_path_search_guidance(
+                path_role="job_script_path",
+                search_roots=[resolved_run_dir, script_path.parent, resolved_run_dir.parent],
+                expected_entries=[script_path.name, "job.long", "job.slurm", "job.pbs", "job.frontera"],
+                keyword_hints=[script_path.name, script_path.stem, "job", "scheduler"],
+            )
             return {
                 "ok": False,
                 "hard_error": True,
                 "error_code": "JOB_SCRIPT_NOT_FOUND",
                 "message": f"Job script does not exist: {script_path}",
+                **path_guidance,
             }
     else:
         candidates = find_likely_job_scripts(resolved_run_dir)
         if not candidates:
+            path_guidance = build_path_search_guidance(
+                path_role="run_dir for job script discovery",
+                search_roots=[resolved_run_dir, resolved_run_dir.parent],
+                expected_entries=["job.long", "job.slurm", "job.pbs", "job.frontera", "job"],
+                keyword_hints=[resolved_run_dir.name, "job", "scheduler", "submit"],
+            )
             return {
                 "ok": False,
                 "hard_error": True,
                 "error_code": "JOB_SCRIPT_NOT_FOUND",
                 "message": f"No likely job script found under run_dir: {resolved_run_dir}",
+                **path_guidance,
             }
         script_path = candidates[0]
 
@@ -1004,12 +1018,22 @@ def swmf_prepare_component_config(
 
     loaded_text, resolved_param_path, load_error = load_param_text(param_text=param_text, param_path=param_path, run_dir=run_dir)
     if load_error is not None or loaded_text is None:
+        hint_payload: dict[str, Any] = {}
+        if param_path is not None and "does not point to a file" in str(load_error or "").lower():
+            param_name = Path(param_path).name or "PARAM.in"
+            hint_payload = build_path_search_guidance(
+                path_role="param_path",
+                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
+                keyword_hints=[param_name, "param", "restart", "setup"],
+            )
         return with_root(
             {
                 "ok": False,
                 "hard_error": True,
                 "message": load_error,
                 "param_path_resolved": resolved_param_path,
+                **hint_payload,
             },
             root,
         )
@@ -1081,12 +1105,22 @@ def swmf_detect_setup_commands(
 
     loaded_text, resolved_param_path, load_error = load_param_text(param_text=param_text, param_path=param_path, run_dir=run_dir)
     if load_error is not None or loaded_text is None:
+        hint_payload: dict[str, Any] = {}
+        if param_path is not None and "does not point to a file" in str(load_error or "").lower():
+            param_name = Path(param_path).name or "PARAM.in"
+            hint_payload = build_path_search_guidance(
+                path_role="param_path",
+                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
+                keyword_hints=[param_name, "param", "restart", "setup"],
+            )
         return with_root(
             {
                 "ok": False,
                 "hard_error": True,
                 "error_code": "PARAM_LOAD_FAILED",
                 "message": load_error,
+                **hint_payload,
             },
             root,
         )
@@ -1116,12 +1150,22 @@ def swmf_apply_setup_commands(
     if effective_commands is None:
         loaded_text, _resolved_param_path, load_error = load_param_text(param_text=param_text, param_path=param_path, run_dir=run_dir)
         if load_error is not None or loaded_text is None:
+            hint_payload: dict[str, Any] = {}
+            if param_path is not None and "does not point to a file" in str(load_error or "").lower():
+                param_name = Path(param_path).name or "PARAM.in"
+                hint_payload = build_path_search_guidance(
+                    path_role="param_path",
+                    search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                    expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
+                    keyword_hints=[param_name, "param", "restart", "setup"],
+                )
             return with_root(
                 {
                     "ok": False,
                     "hard_error": True,
                     "error_code": "PARAM_LOAD_FAILED",
                     "message": load_error,
+                    **hint_payload,
                 },
                 root,
             )

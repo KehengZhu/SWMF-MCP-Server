@@ -99,6 +99,8 @@ def test_swmf_inspect_fits_bad_path(swmf_root_and_run_dir: tuple[Path, Path]) ->
     assert result["ok"] is False
     assert result["hard_error"] is True
     assert "does not point to a file" in result["message"]
+    assert result["path_search_hints"]
+    assert "path_search_roots" in result
 
 
 def test_swmf_inspect_relative_path_resolution(tiny_gong_fits: Path, swmf_root_and_run_dir: tuple[Path, Path]) -> None:
