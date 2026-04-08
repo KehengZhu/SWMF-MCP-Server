@@ -126,12 +126,17 @@ def test_prepare_sc_quickrun_explicit_nproc(tiny_gong_fits: Path, swmf_root_and_
     )
 
     assert result["ok"] is True
+    assert result["guidance_mode"] == "instruction_first"
     assert result["inferred_nproc"] == 48
     assert result["inferred_nproc_source"] == "explicit"
     assert "SC/BATSRUS" in result["recommended_components"]
     assert "IH/BATSRUS" in result["recommended_components"]
     assert result["recommended_next_tool"] == "swmf_validate_external_inputs"
     assert "MCP_HEURISTIC_QUICKRUN_PATCH" in result["suggested_param_template_text"]
+    assert result["workflow_guidance"]
+    assert result["decision_branches"]
+    assert result["variable_guidance"]
+    assert "optional_command_examples" in result
 
 
 def test_prepare_sc_quickrun_inferred_nproc(tiny_gong_fits: Path, swmf_root_and_run_dir: tuple[Path, Path]) -> None:
@@ -171,6 +176,11 @@ def test_prepare_sc_quickrun_enriched_with_swmfsolar_makefile(
     root, run_dir = swmf_root_and_run_dir
     swmfsolar = root.parent / "SWMFSOLAR"
     (swmfsolar / "Scripts").mkdir(parents=True)
+    (swmfsolar / "README").write_text(
+        "The SWMFSOLAR directory must be linked to an installed SWMF source code directory.\n"
+        "It is required to have the symobolic link of SWMF to the installed SWMF.\n",
+        encoding="utf-8",
+    )
     (swmfsolar / "Makefile").write_text(
         "\n".join(
             [
@@ -196,11 +206,14 @@ def test_prepare_sc_quickrun_enriched_with_swmfsolar_makefile(
                 "clean_rundir_tmp:",
                 "\t@echo clean",
                 "run:",
-                "\t@echo run",
+                '\t@if [[ "${MACHINE}" == "frontera" ]]; then sbatch job.long; fi',
                 "adapt_run:",
-                "\t@echo adapt",
+                "\tmake rundir_local",
+                "\tmake run",
                 "rundir_local:",
                 "\t@python Scripts/change_awsom_param.py --map ${MAP} -t ${TIME} -B0 ${PFSS} -p ${POYNTINGFLUX}",
+                "help:",
+                '\t@echo " MODEL=AWSoM - select model"',
                 "",
                 "# ERROR: MODEL must be either AWSoM, AWSoM2T, AWSoMR or AWSoMR_SOFIE.",
             ]
@@ -235,17 +248,27 @@ def test_prepare_sc_quickrun_enriched_with_swmfsolar_makefile(
     assert vars_payload["machine"] == "frontera"
     assert vars_payload["realizations_expression"] == "1"
 
-    compile_cmd = result["swmfsolar_command_groups"]["compile"][0]
+    command_examples = result["optional_command_examples"]["swmfsolar_commands"]
+    compile_cmd = command_examples["compile"][0]
     assert "make compile" in compile_cmd
     assert "MODEL=AWSoMR" in compile_cmd
-    adapt_cmd = result["swmfsolar_command_groups"]["adapt_run"][0]
+    adapt_cmd = command_examples["adapt_run"][0]
     assert "make adapt_run" in adapt_cmd
     assert f"SIMDIR={run_dir.name}" in adapt_cmd
     assert "MACHINE=frontera" in adapt_cmd
-    assert any("change_awsom_param.py" in cmd for cmd in result["swmfsolar_command_groups"]["prepare"])
-    assert result["recommended_build_steps"] == result["swmfsolar_command_groups"]["compile"]
-    assert result["recommended_run_steps"] == result["swmfsolar_command_groups"]["adapt_run"]
+    assert any("change_awsom_param.py" in cmd for cmd in command_examples["prepare"])
+    assert result["optional_command_examples"]["selected_build_sequence"] == command_examples["compile"]
+    assert result["optional_command_examples"]["selected_run_sequence"] == command_examples["adapt_run"]
     assert str((swmfsolar / "Makefile").resolve()) in result["source_paths"]
+    assert str((swmfsolar / "README").resolve()) in result["source_paths"]
+    assert "MODEL" in result["variable_guidance"]
+    assert result["optional_command_examples"]["swmfsolar_commands"]
+    assert "target_recipes" in result
+    assert "adapt_run" in result["target_recipes"]
+    assert "scheduler_branches" in result
+    assert any(item.get("machine") == "frontera" for item in result["scheduler_branches"])
+    assert "environment_prerequisites" in result
+    assert any("required" in item.lower() or "must" in item.lower() for item in result["environment_prerequisites"])
 
 
 def test_prepare_sc_quickrun_model_simdir_machine_overrides(
@@ -289,8 +312,8 @@ def test_prepare_sc_quickrun_model_simdir_machine_overrides(
     assert vars_payload["simdir"] == "Run_Max_SA"
     assert vars_payload["machine"] == "frontera"
 
-    adapt_cmd = result["swmfsolar_command_groups"]["adapt_run"][0]
+    adapt_cmd = result["optional_command_examples"]["swmfsolar_commands"]["adapt_run"][0]
     assert "MODEL=AWSoMR_SOFIE" in adapt_cmd
     assert "SIMDIR=Run_Max_SA" in adapt_cmd
     assert "MACHINE=frontera" in adapt_cmd
-    assert result["recommended_run_steps"] == result["swmfsolar_command_groups"]["adapt_run"]
+    assert result["optional_command_examples"]["selected_run_sequence"] == result["optional_command_examples"]["swmfsolar_commands"]["adapt_run"]

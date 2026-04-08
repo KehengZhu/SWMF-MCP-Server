@@ -68,7 +68,7 @@ def test_swmf_diagnose_param_single_call_authoritative(tmp_path: Path) -> None:
     assert "fastest_likely_fix" in payload
     assert "authoritative_result" in payload
     assert "recommended_commands" in payload
-    assert "recommended_next_step" in payload
+    assert payload["guided_next_steps"]
     assert "authority_by_field" in payload
     assert payload["authoritative_result"]["executed"] is True
 

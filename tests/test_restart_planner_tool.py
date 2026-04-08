@@ -34,13 +34,23 @@ def test_plan_restart_from_background_slurm_preview(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is True
+    assert result["guidance_mode"] == "instruction_first"
     assert result["requires_manual_execution"] is True
     assert result["scheduler_resolved"] == "slurm"
     assert result["restart_mode_effective"] in {"auto", "framework"}
-    assert any(" -c " in cmd for cmd in result["command_groups"]["restart_check"])
-    assert any("Restart.pl" in cmd and "-i -v" in cmd for cmd in result["command_groups"]["restart_link"])
-    assert any("TestParam.pl -n=112" in cmd for cmd in result["command_groups"]["validate"])
-    assert result["command_groups"]["submit_preview"] == ["sbatch job.long"]
+    examples = result["optional_command_examples"]
+    assert any(" -c " in cmd for cmd in examples["restart_check"])
+    assert any("Restart.pl" in cmd and "-i -v" in cmd for cmd in examples["restart_link"])
+    assert any("TestParam.pl -n=112" in cmd for cmd in examples["validate"])
+    assert examples["submit_preview"] == ["sbatch job.long"]
+    assert result["workflow_guidance"]
+    assert result["decision_branches"]
+    assert "RESTART_MODE" in result["variable_guidance"]
+    assert "restart_option_reference" in result
+    assert "restart_time_unit_reference" in result
+    assert "restart_component_mappings" in result
+    assert "optional_command_examples" in result
+    assert "authority_by_field" in result
 
 
 def test_plan_restart_from_background_auto_scheduler_detects_pbs(tmp_path: Path) -> None:
@@ -55,8 +65,10 @@ def test_plan_restart_from_background_auto_scheduler_detects_pbs(tmp_path: Path)
     )
 
     assert result["ok"] is True
+    assert result["guidance_mode"] == "instruction_first"
     assert result["scheduler_resolved"] == "pbs"
-    assert result["command_groups"]["submit_preview"] == ["qsub job.long"]
+    assert result["optional_command_examples"]["submit_preview"] == ["qsub job.long"]
+    assert result["workflow_guidance"]
 
 
 def test_plan_restart_from_background_missing_restart_source(tmp_path: Path) -> None:
@@ -72,6 +84,9 @@ def test_plan_restart_from_background_missing_restart_source(tmp_path: Path) -> 
     assert result["ok"] is False
     assert result["hard_error"] is True
     assert result["error_code"] == "RESTART_SOURCE_NOT_FOUND"
+    assert result["path_search_hints"]
+    assert "path_search_roots" in result
+    assert "path_search_candidates" in result
 
 
 def test_plan_restart_from_background_missing_param_when_validation_requested(tmp_path: Path) -> None:
@@ -89,6 +104,8 @@ def test_plan_restart_from_background_missing_param_when_validation_requested(tm
     assert result["hard_error"] is True
     assert result["error_code"] == "PARAM_NOT_FOUND"
     assert result["requires_manual_execution"] is True
+    assert result["path_search_hints"]
+    assert "path_search_candidates" in result
 
 
 def test_plan_restart_from_background_finds_nested_restart_script(tmp_path: Path) -> None:
@@ -106,8 +123,9 @@ def test_plan_restart_from_background_finds_nested_restart_script(tmp_path: Path
     )
 
     assert result["ok"] is True
+    assert result["guidance_mode"] == "instruction_first"
     assert str(nested_script.resolve()) in result["source_paths"]
-    assert any(str(nested_script.resolve()) in cmd for cmd in result["command_groups"]["restart_link"])
+    assert any(str(nested_script.resolve()) in cmd for cmd in result["optional_command_examples"]["restart_link"])
 
 
 def test_plan_restart_from_background_restart_mode_and_warn_only_flags(tmp_path: Path) -> None:
@@ -124,7 +142,9 @@ def test_plan_restart_from_background_restart_mode_and_warn_only_flags(tmp_path:
     )
 
     assert result["ok"] is True
+    assert result["guidance_mode"] == "instruction_first"
     assert result["restart_mode_effective"] == "framework"
-    link_cmd = result["command_groups"]["restart_link"][0]
+    link_cmd = result["optional_command_examples"]["restart_link"][0]
     assert "-m=framework" in link_cmd
     assert "-W" in link_cmd
+    assert result["variable_guidance"]["WARN_ONLY"]["selected"] is True

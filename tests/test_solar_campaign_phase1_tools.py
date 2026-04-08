@@ -55,6 +55,11 @@ def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
     swmfsolar = tmp_path / "SWMFSOLAR"
     (swmfsolar / "Scripts").mkdir(parents=True)
     (swmfsolar / "Events").mkdir(parents=True)
+    (swmfsolar / "README").write_text(
+        "SWMFSOLAR must be linked to an installed SWMF source code directory.\n"
+        "It is required to have the symbolic link of SWMF to the installed SWMF.\n",
+        encoding="utf-8",
+    )
     (swmfsolar / "Makefile").write_text(
         "\n".join(
             [
@@ -62,8 +67,15 @@ def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
                 "MACHINE = frontera",
                 "POYNTINGFLUX = -1.0",
                 "JOBNAME = amap",
+                "help:",
+                '\t@echo " MODEL=AWSoM - select model"',
+                'run:',
+                '\t@if [[ "${MACHINE}" == "frontera" ]]; then sbatch job.long; fi',
+                "rundir_local:",
+                "\t@echo prep",
                 "adapt_run:",
-                "\t@echo adapt",
+                "\tmake rundir_local",
+                "\tmake run",
             ]
         )
         + "\n",
@@ -80,27 +92,43 @@ def test_plan_solar_campaign_dry_run_preview(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert result["phase"] == "plan_only"
+    assert result["guidance_mode"] == "instruction_first"
     assert result["requires_manual_execution"] is True
     assert result["execute_supported"] is False
     assert result["swmfsolar_root_resolved"] == str(swmfsolar.resolve())
+    assert result["workflow_guidance"]
+    assert result["decision_branches"]
+    assert "MODEL" in result["variable_guidance"]
+    assert "optional_command_examples" in result
+    assert "target_recipes" in result
+    assert "scheduler_branches" in result
+    assert "environment_prerequisites" in result
+    assert "rundir_local" in result["target_recipes"].get("adapt_run", [])
+    assert any(item.get("machine") == "frontera" for item in result["scheduler_branches"])
+    assert any("required" in item.lower() or "must" in item.lower() for item in result["environment_prerequisites"])
+    assert str((swmfsolar / "README").resolve()) in result["source_paths"]
 
-    compile_group = result["command_groups"]["compile"]
+    compile_group = result["optional_command_examples"]["compile"]
     assert compile_group[0] == "make compile DOINSTALL=T MODEL=AWSoM"
     assert compile_group[1] == "make compile DOINSTALL=F MODEL=AWSoMR"
 
-    assert result["command_preview"][0] == f"cd {swmfsolar.resolve()}"
+    assert result["optional_command_examples"]["full_sequence"][0] == f"cd {swmfsolar.resolve()}"
     assert len(result["runs"]) == 2
-    assert any("make rundir_realizations" in cmd for cmd in result["runs"][0]["command_groups"]["prepare_shell"])
-    assert result["runs"][0]["command_groups"]["submit_shell"]
+    assert any("make rundir_realizations" in cmd for cmd in result["runs"][0]["optional_command_examples"]["prepare_shell"])
+    assert result["runs"][0]["optional_command_examples"]["submit_shell"]
+    assert result["runs"][0]["workflow_guidance"]
+    assert result["runs"][0]["decision_branches"]
+    assert "MODEL" in result["runs"][0]["variable_guidance"]
+    assert "optional_command_examples" in result["runs"][0]
 
-    adapt_group = result["command_groups"]["adapt_run"]
+    adapt_group = result["optional_command_examples"]["adapt_run"]
     assert len(adapt_group) == 2
     assert adapt_group[0].startswith("make adapt_run MODEL=AWSoM ")
     assert "MACHINE=frontera" in adapt_group[0]
     assert "POYNTINGFLUX=-1.0" in adapt_group[0]
     assert "JOBNAME=amap" in adapt_group[0]
     assert "POYNTINGFLUX=5e5" in adapt_group[1]
-    assert result["runs"][0]["command_groups"]["adapt_run_shell"]
+    assert result["runs"][0]["optional_command_examples"]["adapt_run_shell"]
 
 
 def test_plan_solar_campaign_without_submit_commands() -> None:
@@ -110,7 +138,10 @@ def test_plan_solar_campaign_without_submit_commands() -> None:
     )
 
     assert result["ok"] is True
-    assert result["command_groups"]["submit"] == []
-    assert result["command_groups"]["adapt_run"] == []
-    assert all(item["command_groups"]["submit_shell"] == [] for item in result["runs"])
-    assert all(item["command_groups"]["adapt_run_shell"] == [] for item in result["runs"])
+    assert result["guidance_mode"] == "instruction_first"
+    assert result["optional_command_examples"]["submit"] == []
+    assert result["optional_command_examples"]["adapt_run"] == []
+    assert result["workflow_guidance"]
+    assert result["decision_branches"]
+    assert all(item["optional_command_examples"]["submit_shell"] == [] for item in result["runs"])
+    assert all(item["optional_command_examples"]["adapt_run_shell"] == [] for item in result["runs"])

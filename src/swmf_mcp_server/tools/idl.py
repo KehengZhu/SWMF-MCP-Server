@@ -199,6 +199,194 @@ def _normalize_artifact_name(name: str) -> str:
     return sanitized or "swmf_output"
 
 
+def _read_text_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+
+def _extract_idl_startup_reference(idlrc_text: str | None) -> dict[str, Any]:
+    if not idlrc_text:
+        return {
+            "detected": False,
+            "compiled_modules": [],
+            "device_branches": [],
+            "default_colortable": None,
+        }
+
+    compiled_modules = re.findall(r"^\s*\.r\s+([A-Za-z0-9_]+)", idlrc_text, flags=re.M)
+    device_branches = [
+        line.strip()
+        for line in idlrc_text.splitlines()
+        if "device" in line and "if strpos(uname" in line
+    ]
+    loadct_match = re.search(r"\bloadct\s*,\s*([0-9]+)", idlrc_text)
+    default_colortable = int(loadct_match.group(1)) if loadct_match else None
+
+    return {
+        "detected": True,
+        "compiled_modules": compiled_modules,
+        "device_branches": device_branches,
+        "default_colortable": default_colortable,
+    }
+
+
+def _extract_idl_function_reference(funcdef_text: str | None, max_items: int = 120) -> list[dict[str, str]]:
+    if not funcdef_text:
+        return []
+    pattern = r"\[\s*'([A-Za-z0-9_]+)'\s*,\s*'([^']+)'"
+    matches = re.findall(pattern, funcdef_text)
+    rows: list[dict[str, str]] = []
+    for name, expression in matches[:max_items]:
+        rows.append({"name": str(name), "expression": str(expression)})
+    return rows
+
+
+def _extract_tex_section_titles(idl_tex_text: str | None) -> list[str]:
+    if not idl_tex_text:
+        return []
+    titles: list[str] = []
+    for match in re.findall(r"\\section\{([^}]+)\}", idl_tex_text):
+        title = str(match).strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
+def _extract_plotmode_reference(idl_tex_text: str | None) -> list[dict[str, Any]]:
+    reference_modes = [
+        "plot",
+        "plot_io",
+        "plot_oi",
+        "plot_oo",
+        "contour",
+        "cont",
+        "contfill",
+        "contbar",
+        "contlabel",
+        "surface",
+        "shade",
+        "tv",
+        "tvbar",
+        "stream",
+        "vector",
+        "velovect",
+        "arrow",
+        "polar",
+    ]
+
+    stacked = (idl_tex_text or "").lower()
+    rows: list[dict[str, Any]] = []
+    for mode in reference_modes:
+        rows.append(
+            {
+                "mode": mode,
+                "detected": bool(re.search(rf"\b{re.escape(mode.lower())}\b", stacked)),
+            }
+        )
+    return rows
+
+
+def _extract_transform_reference(idl_tex_text: str | None, procedures_text: str | None) -> list[dict[str, str]]:
+    transforms = [
+        ("none", "n"),
+        ("regular", "r"),
+        ("polar", "p"),
+        ("unpolar", "u"),
+        ("sphere", "s"),
+        ("my", "m"),
+    ]
+    stacked = "\n".join([idl_tex_text or "", procedures_text or ""]).lower()
+    rows: list[dict[str, str]] = []
+    for name, code in transforms:
+        evidence = "tex_or_procedures"
+        if not re.search(rf"\b{re.escape(name)}\b", stacked):
+            evidence = "fallback_reference"
+        rows.append({"name": name, "code": code, "evidence": evidence})
+    return rows
+
+
+def _discover_idl_authority_sources(swmf_root_resolved: str | None) -> dict[str, Any]:
+    if not swmf_root_resolved:
+        return {
+            "detected": False,
+            "source_paths": [],
+            "startup_reference": {},
+            "plotmode_reference": [],
+            "transform_reference": [],
+            "function_reference": [],
+            "manual_section_titles": [],
+            "environment_prerequisites": [],
+            "warnings": ["SWMF root was not provided; IDL authority discovery from share/IDL was skipped."],
+        }
+
+    root = Path(swmf_root_resolved).expanduser().resolve()
+    idl_root = root / "share" / "IDL"
+    if not idl_root.is_dir():
+        return {
+            "detected": False,
+            "source_paths": [],
+            "startup_reference": {},
+            "plotmode_reference": [],
+            "transform_reference": [],
+            "function_reference": [],
+            "manual_section_titles": [],
+            "environment_prerequisites": [],
+            "warnings": [f"IDL authority directory was not found: {idl_root}"],
+        }
+
+    paths = {
+        "idlrc": idl_root / "General" / "idlrc",
+        "procedures": idl_root / "General" / "procedures.pro",
+        "funcdef": idl_root / "General" / "funcdef.pro",
+        "set_defaults": idl_root / "General" / "set_defaults.pro",
+        "idl_tex": idl_root / "doc" / "Tex" / "idl.tex",
+        "solar_readme": idl_root / "Solar" / "README",
+    }
+
+    source_paths = [str(path.resolve()) for path in paths.values() if path.is_file()]
+    text_map = {key: _read_text_file(path) for key, path in paths.items()}
+
+    startup_reference = _extract_idl_startup_reference(text_map.get("idlrc"))
+    plotmode_reference = _extract_plotmode_reference(text_map.get("idl_tex"))
+    transform_reference = _extract_transform_reference(text_map.get("idl_tex"), text_map.get("procedures"))
+    function_reference = _extract_idl_function_reference(text_map.get("funcdef"))
+    manual_section_titles = _extract_tex_section_titles(text_map.get("idl_tex"))
+
+    environment_prerequisites: list[str] = []
+    if text_map.get("idl_tex"):
+        environment_prerequisites.extend(
+            [
+                "Set IDL_PATH to include SWMF/share/IDL/General before running visualization macros.",
+                "Set IDL_STARTUP to idlrc or execute @idlrc in an IDL session.",
+            ]
+        )
+    if text_map.get("idlrc"):
+        environment_prerequisites.append("idlrc compiles procedures, set_defaults, vector, and funcdef at startup.")
+    if text_map.get("solar_readme"):
+        environment_prerequisites.append("Solar workflows may require additional environment setup from SWMF/share/IDL/Solar/README.")
+
+    warnings: list[str] = []
+    for key in ["idlrc", "procedures", "funcdef", "idl_tex"]:
+        if text_map.get(key) is None:
+            warnings.append(f"IDL authority file missing or unreadable: {paths[key]}")
+
+    return {
+        "detected": True,
+        "source_paths": source_paths,
+        "startup_reference": startup_reference,
+        "plotmode_reference": plotmode_reference,
+        "transform_reference": transform_reference,
+        "function_reference": function_reference,
+        "manual_section_titles": manual_section_titles,
+        "environment_prerequisites": environment_prerequisites,
+        "warnings": warnings,
+    }
+
+
 def _parse_visualization_request(request: str) -> dict:
     text = request.strip().lower()
     warnings: list[str] = []
@@ -532,6 +720,9 @@ def prepare_idl_workflow(
     warnings = list(parsed["warnings"])
     assumptions = list(parsed["assumptions"])
     task = parsed["task"]
+    authority_discovery = _discover_idl_authority_sources(swmf_root_resolved)
+    warnings.extend([str(item) for item in authority_discovery.get("warnings", [])])
+    source_paths = [str(item) for item in authority_discovery.get("source_paths", []) if isinstance(item, str)]
 
     resolved_run_dir = resolve_run_dir(run_dir)
     if output_pattern:
@@ -561,11 +752,11 @@ def prepare_idl_workflow(
 
     idl_script_filename = f"idl_{task}_{export_name}.pro"
     idl_script_lines: list[str] = []
-    workflow_hints = [f"Use run_dir_resolved ({resolved_run_dir}) as the working directory."]
+    execution_hints = [f"Use run_dir_resolved ({resolved_run_dir}) as the working directory."]
     notes = [
         "This tool only prepares commands and script text; nothing is executed.",
         "Run from the directory containing your SWMF output files unless your script uses absolute paths.",
-        "workflow_hints contains workflow guidance (not executable shell commands).",
+        "Execution hints contain workflow guidance (not executable shell commands).",
     ]
     guidance: list[str] = []
     requires_clarification = False
@@ -578,7 +769,7 @@ def prepare_idl_workflow(
     if task == "animate":
         component_for_title = f" in {parsed['component']}" if parsed["component"] else ""
         plot_title = f"{variable.upper()}{component_for_title} {(parsed['cut_plane'] or 'requested cut')} cut"
-        workflow_hints.append(
+        execution_hints.append(
             "Create a combined multi-snapshot .outs file from files matching output_pattern before running animate_data."
         )
         notes.append("animate_data expects a combined multi-snapshot .outs file.")
@@ -651,7 +842,7 @@ def prepare_idl_workflow(
             if export_format in raster_image_formats:
                 warnings.append("SWMF IDL set_device uses a PostScript backend. Non-PS plot exports require conversion from .ps.")
                 notes.append("For plot task, non-PS formats are produced by converting PostScript output.")
-                workflow_hints.append(
+                execution_hints.append(
                     f"After plotting, convert '{ps_file}' to '{export_name}.{export_format}' with your preferred PostScript conversion tool."
                 )
             else:
@@ -728,14 +919,129 @@ def prepare_idl_workflow(
         ]
         notes.append("Request was broad; generated a starter script. Add the specific macro sequence you want.")
 
-    workflow_hints.append("Save idl_script text to idl_script_filename before manual execution.")
-    workflow_hints.append(_idl_command_with_env(swmf_root_resolved, idl_script_filename, warnings))
+    execution_hints.append("Save idl_script text to idl_script_filename before manual execution.")
+    execution_hints.append(_idl_command_with_env(swmf_root_resolved, idl_script_filename, warnings))
+
+    workflow_guidance = [
+        "Treat this output as guidance-first: validate file paths, task choices, and plotting modes before IDL execution.",
+        "Use share/IDL startup semantics (idlrc and related macros) to prepare runtime environment when needed.",
+        "Keep command/script examples editable; adapt output pattern, function names, and plot options to your run data.",
+    ]
+    if authority_discovery.get("detected"):
+        workflow_guidance.append("Guidance references were extracted from SWMF/share/IDL authority files.")
+
+    decision_branches = [
+        {
+            "name": "task_selection",
+            "when": "task argument is provided or inferred from request text.",
+            "action": "Use inferred.task and associated script template branch.",
+            "status": "explicit" if normalized_task is not None else "inferred",
+            "selected_task": task,
+        },
+        {
+            "name": "file_resolution",
+            "when": "input_file/output_pattern may be missing.",
+            "action": "Provide concrete file inputs when requires_file_resolution is true.",
+            "status": "needs_input" if requires_file_resolution else "ready",
+        },
+        {
+            "name": "output_export_mode",
+            "when": "output_format is set for plotting/animation tasks.",
+            "action": "Use export settings in normalized_inputs and idl_script output lines.",
+            "status": "configured" if export_format != "none" else "none",
+            "output_format": export_format,
+        },
+    ]
+    if task == "transform":
+        decision_branches.append(
+            {
+                "name": "transform_mode",
+                "when": "task='transform'.",
+                "action": "Use inferred.transform_mode and transform reference guidance before plotting.",
+                "status": "configured",
+                "transform_mode": parsed.get("transform_mode") or "r",
+            }
+        )
+
+    variable_guidance = {
+        "TASK": {
+            "selected": task,
+            "source": "explicit_task" if normalized_task is not None else "request_inference",
+            "description": "Determines which IDL template branch is emitted.",
+            "how_to_override": "Set task explicitly to avoid ambiguous request inference.",
+        },
+        "OUTPUT_PATTERN": {
+            "selected": pattern,
+            "source": "input" if output_pattern else "heuristic_default",
+            "description": "Pattern used to identify candidate output snapshots.",
+            "how_to_override": "Set output_pattern explicitly to match your file naming conventions.",
+        },
+        "INPUT_FILE": {
+            "selected": data_file,
+            "source": "input" if input_file else "template_default",
+            "description": "Primary file consumed by read_data/read_log_data template lines.",
+            "how_to_override": "Provide input_file for non-generic script templates.",
+        },
+        "PLOTMODE": {
+            "selected": plotmode,
+            "source": "request_inference" if parsed.get("plotmode") else "task_default",
+            "description": "IDL plotting mode token used by plot_data/animate_data.",
+            "how_to_override": "Mention explicit plotting mode in request or set task-specific parameters.",
+        },
+        "OUTPUT_FORMAT": {
+            "selected": export_format,
+            "source": "input_or_default",
+            "description": "Controls export branch for images/videos and related script lines.",
+            "how_to_override": "Set output_format to one of the supported formats.",
+        },
+    }
+    if task == "transform":
+        variable_guidance["TRANSFORM_MODE"] = {
+            "selected": parsed.get("transform_mode") or "r",
+            "source": "request_inference" if parsed.get("transform_mode") else "default",
+            "description": "Grid transformation mode used in transform workflow templates.",
+            "how_to_override": "Specify regular/polar/unpolar/sphere/my in the request.",
+        }
+
+    environment_prerequisites = list(authority_discovery.get("environment_prerequisites", []))
+    if not environment_prerequisites:
+        environment_prerequisites = [
+            "Ensure IDL runtime and SWMF/share/IDL macro paths are available before execution.",
+        ]
+
+    authority_by_field = {
+        "idl_authority_sections": "authoritative" if bool(source_paths) else "heuristic",
+        "workflow_guidance": "derived",
+        "decision_branches": "derived",
+        "variable_guidance": "derived",
+        "inferred": "heuristic",
+        "idl_script": "template",
+    }
+
+    optional_command_examples = {
+        "idl_script_filename": idl_script_filename,
+        "idl_script": "\n".join(line for line in idl_script_lines if line),
+        "execution_hints": execution_hints,
+    }
+
+    idl_authority_sections = {
+        "startup_reference": authority_discovery.get("startup_reference", {}),
+        "plotmode_reference": authority_discovery.get("plotmode_reference", []),
+        "transform_reference": authority_discovery.get("transform_reference", []),
+        "function_reference": authority_discovery.get("function_reference", []),
+        "manual_section_titles": authority_discovery.get("manual_section_titles", []),
+    }
+
+    if any("docs/idl.md" in path for path in source_paths):
+        source_paths = [path for path in source_paths if "docs/idl.md" not in path]
+        warnings.append("Excluded docs/idl.md from source_paths; runtime authority is limited to SWMF/share/IDL.")
 
     return {
         "ok": True,
+        "guidance_mode": "instruction_first",
         "authority": "heuristic",
-        "source_kind": "curated",
-        "source_paths": [],
+        "source_kind": "curated_with_share_idl_authority",
+        "source_paths": sorted(set(source_paths)),
         "request": normalized_request,
         "run_dir_resolved": str(resolved_run_dir),
         "capability": task,
@@ -764,7 +1070,13 @@ def prepare_idl_workflow(
             "artifact_name": export_name,
             "frame_indices": frame_indices,
         },
-        "workflow_hints": workflow_hints,
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "environment_prerequisites": environment_prerequisites,
+        "authority_by_field": authority_by_field,
+        "idl_authority_sections": idl_authority_sections,
+        "optional_command_examples": optional_command_examples,
         "idl_script_filename": idl_script_filename,
         "idl_script": "\n".join(line for line in idl_script_lines if line),
         "guided_next_steps": guidance,
@@ -1128,9 +1440,9 @@ def swmf_inspect_fits_magnetogram(
 
 
 def register(app: Any) -> None:
-    app.tool(description="Prepare an SWMF IDL workflow script and shell command sequence.")(swmf_prepare_idl_workflow)
+    app.tool(description="Prepare guidance-first SWMF IDL workflow planning with source-grounded references.")(swmf_prepare_idl_workflow)
     app.tool(description="Inspect FITS magnetogram metadata for SC quickrun preparation.")(swmf_inspect_fits_magnetogram)
     app.tool(description="List indexed SWMF IDL procedures with optional category filtering.")(swmf_list_idl_procedures)
     app.tool(description="Explain one indexed SWMF IDL procedure and its signature details.")(swmf_explain_idl_procedure)
-    app.tool(description="Generate an IDL script payload from task-oriented SWMF inputs.")(swmf_generate_idl_script)
+    app.tool(description="Generate a guidance-first IDL script payload from task-oriented SWMF inputs.")(swmf_generate_idl_script)
     app.tool(description="Run IDL batch script content in a specified working directory.")(swmf_run_idl_batch)

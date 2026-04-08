@@ -59,6 +59,136 @@ def _extract_makefile_targets(makefile_text: str) -> list[str]:
     return targets
 
 
+def _extract_makefile_target_recipe(makefile_text: str, target: str) -> list[str]:
+    lines = makefile_text.splitlines()
+    start_index: int | None = None
+    for index, line in enumerate(lines):
+        if re.match(rf"^\s*{re.escape(target)}\s*:", line):
+            start_index = index + 1
+            break
+
+    if start_index is None:
+        return []
+
+    recipe: list[str] = []
+    for line in lines[start_index:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^[A-Za-z][A-Za-z0-9_]*\s*:", line):
+            break
+        if line.startswith("\t") or line.startswith(" "):
+            recipe.append(stripped)
+            continue
+        if stripped.startswith("#"):
+            continue
+        break
+    return recipe
+
+
+def _extract_config_help_block(config_text: str) -> str | None:
+    marker = "Additional options for SWMF/Config.pl:"
+    start = config_text.find(marker)
+    if start < 0:
+        return None
+
+    end_marker = "#EOC"
+    end = config_text.find(end_marker, start)
+    if end < 0:
+        end = len(config_text)
+    return config_text[start:end]
+
+
+def _extract_config_options(help_block: str) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+    lines = help_block.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("-"):
+            continue
+        parts = stripped.split(None, 1)
+        name = parts[0]
+        summary = parts[1].strip() if len(parts) > 1 else ""
+        detail = []
+        for follow in lines[index + 1 :]:
+            follow_stripped = follow.strip()
+            if not follow_stripped:
+                break
+            if follow_stripped.startswith("-"):
+                break
+            detail.append(follow_stripped)
+        options.append(
+            {
+                "name": name,
+                "summary": summary,
+                "details": " ".join(detail).strip(),
+            }
+        )
+    return options
+
+
+def _extract_config_examples(help_block: str) -> list[str]:
+    examples: list[str] = []
+    seen: set[str] = set()
+    for line in help_block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Config.pl "):
+            if stripped not in seen:
+                seen.add(stripped)
+                examples.append(stripped)
+    return examples
+
+
+def _discover_swmf_config_guidance(swmf_root_resolved: str | None) -> dict[str, Any]:
+    if swmf_root_resolved is None:
+        return {
+            "detected": False,
+            "config_path": None,
+            "options": [],
+            "examples": [],
+            "warnings": ["SWMF root was not provided for Config.pl guidance discovery."],
+        }
+
+    config_path = Path(swmf_root_resolved).expanduser().resolve() / "Config.pl"
+    if not config_path.is_file():
+        return {
+            "detected": False,
+            "config_path": str(config_path),
+            "options": [],
+            "examples": [],
+            "warnings": [f"Config.pl was not found at {config_path}."],
+        }
+
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "detected": False,
+            "config_path": str(config_path),
+            "options": [],
+            "examples": [],
+            "warnings": [f"Failed to read Config.pl: {exc}"],
+        }
+
+    help_block = _extract_config_help_block(config_text)
+    if help_block is None:
+        return {
+            "detected": False,
+            "config_path": str(config_path),
+            "options": [],
+            "examples": [],
+            "warnings": ["Could not locate Config.pl help block for option guidance."],
+        }
+
+    return {
+        "detected": True,
+        "config_path": str(config_path),
+        "options": _extract_config_options(help_block),
+        "examples": _extract_config_examples(help_block),
+        "warnings": [],
+    }
+
+
 def _discover_swmf_makefile_capabilities(swmf_root_resolved: str | None) -> dict[str, Any]:
     if swmf_root_resolved is None:
         return {
@@ -97,6 +227,18 @@ def _discover_swmf_makefile_capabilities(swmf_root_resolved: str | None) -> dict
 
     build_targets = [target for target in _SWMF_MAKEFILE_BUILD_TARGET_CANDIDATES if target in target_set]
     run_targets = [target for target in _SWMF_MAKEFILE_RUN_TARGET_CANDIDATES if target in target_set]
+    recipe_targets = ["SWMF", "ALL", "rundir", "parallelrun", "serialrun", "rundir_code"]
+    target_recipes = {
+        target: _extract_makefile_target_recipe(makefile_text, target)
+        for target in recipe_targets
+        if _extract_makefile_target_recipe(makefile_text, target)
+    }
+
+    environment_prerequisites: list[str] = []
+    if "include Makefile.def" in makefile_text:
+        environment_prerequisites.append("SWMF Makefile includes Makefile.def; installation/configuration must provide it.")
+    if "ENV_CHECK" in makefile_text:
+        environment_prerequisites.append("ENV_CHECK target validates DIR/OS consistency before major build and run operations.")
 
     capabilities = {
         "targets": targets,
@@ -108,6 +250,8 @@ def _discover_swmf_makefile_capabilities(swmf_root_resolved: str | None) -> dict
         "supports_np_variable": ("np" in default_variables) or ("${NP}" in makefile_text),
         "supports_rundir_variable": ("rundir" in default_variables) or ("${RUNDIR}" in makefile_text),
         "has_testparam_reference": "TestParam.pl" in makefile_text,
+        "target_recipes": target_recipes,
+        "environment_prerequisites": environment_prerequisites,
     }
 
     warnings: list[str] = []
@@ -190,6 +334,7 @@ def prepare_build(
     swmf_root_resolved: str | None = None,
 ) -> dict[str, Any]:
     makefile_discovery = _discover_swmf_makefile_capabilities(swmf_root_resolved=swmf_root_resolved)
+    config_discovery = _discover_swmf_config_guidance(swmf_root_resolved=swmf_root_resolved)
 
     requested = _normalize_component_list(components_csv)
     if not requested:
@@ -229,6 +374,9 @@ def prepare_build(
     makefile_path = makefile_discovery.get("makefile_path")
     if isinstance(makefile_path, str) and makefile_path:
         source_paths.append(makefile_path)
+    config_path = config_discovery.get("config_path")
+    if isinstance(config_path, str) and config_path:
+        source_paths.append(config_path)
 
     notes = [
         "The prototype returns suggested commands only. It does not execute them.",
@@ -238,21 +386,111 @@ def prepare_build(
     if isinstance(capabilities, dict) and bool(capabilities.get("is_notparallel")):
         notes.append("SWMF Makefile declares .NOTPARALLEL, so target-based make invocations are preferred over generic parallel make calls.")
 
+    variable_guidance = {
+        "COMPONENTS": {
+            "selected": requested,
+            "description": "Component versions passed to Config.pl -v. Keep Empty plus explicitly required non-empty components.",
+            "how_to_override": "Set components_csv with authoritative component/version pairs for your build.",
+        },
+        "COMPILER": {
+            "selected": compiler,
+            "description": "Compiler selection influences module/toolchain compatibility and MPI wrappers.",
+            "how_to_override": "Pass compiler explicitly to swmf_prepare_build or run Config.pl manually.",
+        },
+        "OPTIMIZATION": {
+            "selected": optimization,
+            "description": "Optimization level is a heuristic default when not explicitly provided.",
+            "how_to_override": "Set optimization directly when preparing build guidance.",
+        },
+        "DEBUG": {
+            "selected": debug,
+            "description": "Debug mode toggles Config.pl debug flags and can change runtime behavior/performance.",
+            "how_to_override": "Set debug=True for diagnostic builds.",
+        },
+    }
+
+    makefile_target_recipes: dict[str, list[str]] = {}
+    environment_prerequisites: list[str] = []
+    if isinstance(capabilities, dict):
+        makefile_target_recipes = {
+            str(key): [str(item) for item in value]
+            for key, value in dict(capabilities.get("target_recipes", {})).items()
+            if isinstance(value, list)
+        }
+        environment_prerequisites = [str(item) for item in capabilities.get("environment_prerequisites", [])]
+
+    config_option_reference = [
+        {
+            "name": str(item.get("name", "")),
+            "summary": str(item.get("summary", "")),
+            "details": str(item.get("details", "")),
+        }
+        for item in config_discovery.get("options", [])
+        if isinstance(item, dict)
+    ]
+    config_examples = [str(item) for item in config_discovery.get("examples", [])]
+
+    target_detection = "detected" if bool(makefile_discovery.get("detected", False)) else "not_detected"
+    decision_branches = [
+        {
+            "name": "makefile_target_build",
+            "when": "SWMF Makefile capabilities are detected and a preferred build target is available.",
+            "action": "Use recommended_make_build_target and optional_command_examples.build as optional examples.",
+            "status": "available" if recommended_make_build_target is not None else "unavailable",
+            "target_detection": target_detection,
+        },
+        {
+            "name": "generic_parallel_build",
+            "when": "No authoritative build target is detected.",
+            "action": "Use make -j style examples and adapt for local compiler/MPI environment.",
+            "status": "fallback",
+            "target_detection": target_detection,
+        },
+    ]
+
+    workflow_guidance = [
+        "Treat command outputs as optional examples and validate SWMF Makefile targets/variables in your environment first.",
+        "Confirm component version selections satisfy PARAM-inferred active components before rebuilding.",
+        "Use decision_branches to choose target-based or generic build strategy, then run validation checks in your local workflow.",
+    ]
+
+    assumptions: list[str] = []
+    if not bool(makefile_discovery.get("detected", False)):
+        assumptions.append("SWMF Makefile capability discovery was unavailable; build recommendations may rely on generic defaults.")
+    if compiler is None:
+        assumptions.append("Compiler was not explicitly provided; install/config commands use Config.pl defaults.")
+    if not bool(config_discovery.get("detected", False)):
+        assumptions.append("Config.pl help guidance could not be fully extracted; option/exemplar teaching may be limited.")
+
     return {
         "ok": True,
+        "guidance_mode": "instruction_first",
         "selected_components": requested,
         "config_pl_v_argument": version_arg,
-        "suggested_commands": commands,
-        "command_groups": {
-            "configure": configure_commands,
-            "build": build_commands,
-            "optional_targets": optional_make_targets,
-        },
         "recommended_make_build_target": recommended_make_build_target,
         "swmf_makefile_detected": bool(makefile_discovery.get("detected", False)),
         "swmf_makefile_path": makefile_path,
         "swmf_makefile_capabilities": capabilities,
-        "warnings": list(makefile_discovery.get("warnings", [])),
+        "swmf_config_guidance_detected": bool(config_discovery.get("detected", False)),
+        "swmf_config_path": config_path,
+        "warnings": [
+            *list(makefile_discovery.get("warnings", [])),
+            *list(config_discovery.get("warnings", [])),
+        ],
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "makefile_target_recipes": makefile_target_recipes,
+        "config_option_reference": config_option_reference,
+        "config_examples": config_examples,
+        "environment_prerequisites": environment_prerequisites,
+        "assumptions": assumptions,
+        "optional_command_examples": {
+            "full_sequence": commands,
+            "configure": configure_commands,
+            "build": build_commands,
+            "optional_targets": optional_make_targets,
+        },
         "authority": "heuristic",
         "source_kind": "curated",
         "source_paths": source_paths,
@@ -265,8 +503,13 @@ def prepare_component_config(
 ) -> dict[str, Any]:
     parsed = parse_param_text(param_text)
     recommendation = _build_component_config_recommendation(_infer_required_components_from_sessions(parsed.sessions))
+    workflow_guidance = [
+        "Use required_components as a discovery result, then reconcile with component catalogs and site-specific build availability.",
+        "Treat recommended_config_command as an optional template before executing in your SWMF root.",
+    ]
     return {
         "ok": True,
+        "guidance_mode": "instruction_first",
         "authority": "heuristic",
         "source_kind": "lightweight_parser",
         "source_paths": [],
@@ -275,6 +518,11 @@ def prepare_component_config(
         "components_without_default_mapping": recommendation["components_without_default_mapping"],
         "recommended_config_command": recommendation["recommended_config_command"],
         "rebuild_commands": recommendation["rebuild_commands"],
+        "workflow_guidance": workflow_guidance,
+        "optional_command_examples": {
+            "recommended_config_command": recommendation["recommended_config_command"],
+            "rebuild_commands": recommendation["rebuild_commands"],
+        },
         "warnings": recommendation["warnings"],
     }
 
@@ -362,6 +610,7 @@ def prepare_run(
     swmf_root_resolved: str | None = None,
 ) -> dict[str, Any]:
     makefile_discovery = _discover_swmf_makefile_capabilities(swmf_root_resolved=swmf_root_resolved)
+    config_discovery = _discover_swmf_config_guidance(swmf_root_resolved=swmf_root_resolved)
 
     map_rows: list[str] = []
     map_errors: list[str] = []
@@ -433,18 +682,18 @@ def prepare_run(
         run_dir_command = f"make rundir RUNDIR={shlex.quote(run_name)}"
 
     run_param_path = f"{run_name}/PARAM.in"
-    suggested_commands = [
+    run_sequence = [
         run_dir_command,
         f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_param_path}",
         f"cd {run_name}",
     ]
 
     if not has_rundir and run_name != "run":
-        suggested_commands.insert(1, f"mv run {run_name}")
+        run_sequence.insert(1, f"mv run {run_name}")
     elif has_rundir and run_name == "run":
         run_param_path = "run/PARAM.in"
-        suggested_commands[1] = f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_param_path}"
-        suggested_commands[2] = "cd run"
+        run_sequence[1] = f"# From SWMF_ROOT: ./Scripts/TestParam.pl -n={nproc} {run_param_path}"
+        run_sequence[2] = "cd run"
 
     local_execution_commands: list[str] = []
     if has_serialrun:
@@ -460,9 +709,83 @@ def prepare_run(
     makefile_path = makefile_discovery.get("makefile_path")
     if isinstance(makefile_path, str) and makefile_path:
         source_paths.append(makefile_path)
+    config_path = config_discovery.get("config_path")
+    if isinstance(config_path, str) and config_path:
+        source_paths.append(config_path)
+
+    target_detection = "detected" if bool(makefile_discovery.get("detected", False)) else "not_detected"
+    workflow_guidance = [
+        "Treat suggested run commands as optional examples and verify run directory naming/paths in your deployment context.",
+        "Always run TestParam.pl from SWMF root before submission; do not assume planner output is authoritative runtime validation.",
+        "Use local_execution command examples only when they match your available Makefile run targets.",
+    ]
+    decision_branches = [
+        {
+            "name": "makefile_rundir_path",
+            "when": "Makefile exposes rundir target.",
+            "action": "Use make rundir (optionally with RUNDIR override) before validation and execution.",
+            "status": "available" if has_rundir else "unavailable",
+            "target_detection": target_detection,
+        },
+        {
+            "name": "manual_run_directory_path",
+            "when": "rundir target is unavailable.",
+            "action": "Create/rename run directory manually and update PARAM path used by TestParam.pl.",
+            "status": "fallback" if not has_rundir else "available",
+            "target_detection": target_detection,
+        },
+    ]
+    variable_guidance = {
+        "NPROC": {
+            "selected": nproc,
+            "source": nproc_source,
+            "description": "MPI process count used by TestParam and parallel run examples.",
+            "how_to_override": "Provide nproc explicitly or update job-script inference inputs.",
+        },
+        "RUN_NAME": {
+            "selected": run_name,
+            "description": "Run directory stem used to place PARAM.in and execution artifacts.",
+            "how_to_override": "Pass run_name explicitly and confirm directory layout in your filesystem.",
+        },
+        "TIME_ACCURATE": {
+            "selected": time_accurate,
+            "description": "Switches STOP block semantics between simulation time and iteration-count control.",
+            "how_to_override": "Set time_accurate according to scenario requirements.",
+        },
+    }
+
+    makefile_target_recipes: dict[str, list[str]] = {}
+    environment_prerequisites: list[str] = []
+    if isinstance(capabilities, dict):
+        makefile_target_recipes = {
+            str(key): [str(item) for item in value]
+            for key, value in dict(capabilities.get("target_recipes", {})).items()
+            if isinstance(value, list)
+        }
+        environment_prerequisites = [str(item) for item in capabilities.get("environment_prerequisites", [])]
+
+    config_option_reference = [
+        {
+            "name": str(item.get("name", "")),
+            "summary": str(item.get("summary", "")),
+            "details": str(item.get("details", "")),
+        }
+        for item in config_discovery.get("options", [])
+        if isinstance(item, dict)
+    ]
+    config_examples = [str(item) for item in config_discovery.get("examples", [])]
+
+    assumptions: list[str] = []
+    if nproc_source == "heuristic_default":
+        assumptions.append("nproc used a heuristic fallback; validate MPI layout with scheduler/job script before execution.")
+    if not has_rundir:
+        assumptions.append("Makefile rundir target is unavailable; command examples include manual directory handling fallback.")
+    if not bool(config_discovery.get("detected", False)):
+        assumptions.append("Config.pl guidance was not fully discoverable; verify configuration options with local Config.pl -help output.")
 
     return {
         "ok": True,
+        "guidance_mode": "instruction_first",
         "authority": "heuristic",
         "source_kind": "curated",
         "source_paths": [],
@@ -473,18 +796,27 @@ def prepare_run(
         "time_accurate": time_accurate,
         "starter_param_in": param_in,
         "testparam_constraint": "TestParam.pl must be run from SWMF_ROOT, not from the run directory.",
-        "suggested_commands": suggested_commands,
-        "command_groups": {
-            "prepare": [suggested_commands[0]],
-            "validate": [suggested_commands[1]],
-            "enter_run_dir": [suggested_commands[-1]],
-            "local_execution": local_execution_commands,
-        },
         "swmf_makefile_detected": bool(makefile_discovery.get("detected", False)),
         "swmf_makefile_path": makefile_path,
         "swmf_makefile_capabilities": capabilities,
-        "local_execution_commands": local_execution_commands,
-        "warnings": run_warnings,
+        "swmf_config_guidance_detected": bool(config_discovery.get("detected", False)),
+        "swmf_config_path": config_path,
+        "warnings": [*run_warnings, *list(config_discovery.get("warnings", []))],
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "makefile_target_recipes": makefile_target_recipes,
+        "config_option_reference": config_option_reference,
+        "config_examples": config_examples,
+        "environment_prerequisites": environment_prerequisites,
+        "assumptions": assumptions,
+        "optional_command_examples": {
+            "full_sequence": run_sequence,
+            "prepare": [run_sequence[0]],
+            "validate": [run_sequence[1]],
+            "enter_run_dir": [run_sequence[-1]],
+            "local_execution": local_execution_commands,
+        },
         "testparam_full_command_example": f"cd SWMF_ROOT && ./Scripts/TestParam.pl -n={nproc} $(pwd)/{run_name}/PARAM.in",
         "requires_manual_submission": True,
         "auto_submit_permitted": False,
@@ -820,10 +1152,10 @@ def swmf_apply_setup_commands(
 
 
 def register(app: Any) -> None:
-    app.tool(description="Prepare SWMF build commands from component and compiler selections.")(swmf_prepare_build)
+    app.tool(description="Prepare guidance-first SWMF build planning from component and compiler selections.")(swmf_prepare_build)
     app.tool(description="Prepare component configuration guidance from PARAM content.")(swmf_prepare_component_config)
     app.tool(description="Explain recommended fixes for component-configuration mismatches.")(swmf_explain_component_config_fix)
     app.tool(description="Infer MPI/job layout settings from job scripts or run context.")(swmf_infer_job_layout)
-    app.tool(description="Prepare SWMF run commands and PARAM snippets from component map inputs.")(swmf_prepare_run)
+    app.tool(description="Prepare guidance-first SWMF run planning and PARAM snippets from component map inputs.")(swmf_prepare_run)
     app.tool(description="Detect allowed setup commands embedded in PARAM content.")(swmf_detect_setup_commands)
     app.tool(description="Apply allowed setup commands within the resolved SWMF root.")(swmf_apply_setup_commands)

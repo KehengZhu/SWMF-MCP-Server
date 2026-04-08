@@ -421,11 +421,23 @@ def _extract_named_token_value(raw_tokens: list[str], key: str) -> str | None:
     return None
 
 
+def _token_has_named_value(raw_tokens: list[str], key: str) -> bool:
+    key_lower = key.lower()
+    for token in raw_tokens:
+        if "=" not in token:
+            continue
+        name, _value = token.split("=", 1)
+        if name.strip().lower() == key_lower:
+            return True
+    return False
+
+
 def _plan_single_run(
     entry: dict[str, Any],
     include_submit_commands: bool,
     makefile_default_variables: dict[str, str] | None = None,
     include_adapt_run_commands: bool = False,
+    adapt_run_target_detected: bool | None = None,
 ) -> dict[str, Any]:
     run_id = int(entry["run_id"])
     model = str(entry["model"])
@@ -518,6 +530,76 @@ def _plan_single_run(
     if restartdir:
         key_params_preview.append(f"restartdir={restartdir}")
 
+    variable_guidance = {
+        "MODEL": {
+            "selected": model,
+            "source": "event_list_token" if _token_has_named_value(raw_tokens, "model") else "default_or_inferred",
+            "description": "Selects the SWMFSOLAR model family used by make targets and copied PARAM defaults.",
+            "how_to_override": "Set model=<value> in event list or pass a model hint at tool entry points that support overrides.",
+        },
+        "MAP": {
+            "selected": map_value,
+            "source": "event_list_token" if _token_has_named_value(raw_tokens, "map") else "default_or_inferred",
+            "description": "Magnetogram/map path or selector consumed by change_awsom_param workflow.",
+            "how_to_override": "Set map=<value> in event list; ensure the path resolves in SWMFSOLAR runtime context.",
+        },
+        "PFSS": {
+            "selected": pfss,
+            "source": "event_list_token" if _token_has_named_value(raw_tokens, "pfss") else "makefile_or_tool_default",
+            "description": "Coronal field extrapolation selector (typically HARMONICS or FDIPS).",
+            "how_to_override": "Set pfss=<value> in event list or override via Makefile variables during make invocation.",
+        },
+        "REALIZATIONS": {
+            "selected": realization_expr or "1",
+            "source": str(entry.get("realizations_source", "default_or_inferred")),
+            "description": "Realization IDs to expand into run directories.",
+            "how_to_override": "Set realizations=<csv_or_ranges> in event list, for example realization=[1,2-4].",
+        },
+        "SIMDIR": {
+            "selected": simdir,
+            "source": "derived_from_run_id_and_model",
+            "description": "Per-run output directory stem used by backup/rundir/run targets.",
+            "how_to_override": "Adjust run naming conventions upstream or post-process generated plans before execution.",
+        },
+        "JOBNAME": {
+            "selected": jobname,
+            "source": "event_list_token"
+            if _token_has_named_value(raw_tokens, "jobname")
+            else ("makefile_default" if "jobname" in default_variables else "tool_default"),
+            "description": "Scheduler-visible job label passed to make run/adapt_run paths.",
+            "how_to_override": "Set JOBNAME=<value> in event list tokens or SWMFSOLAR Makefile defaults.",
+        },
+    }
+
+    adapt_detection = "unknown"
+    if adapt_run_target_detected is True:
+        adapt_detection = "detected"
+    elif adapt_run_target_detected is False:
+        adapt_detection = "not_detected"
+
+    decision_branches = [
+        {
+            "name": "prefer_adapt_run",
+            "when": "Makefile target adapt_run exists and submit commands are enabled.",
+            "action": "Use make adapt_run as a compact orchestration path.",
+            "status": "available" if (include_submit_commands and include_adapt_run_commands) else "disabled",
+            "target_detection": adapt_detection,
+        },
+        {
+            "name": "manual_prepare_then_submit",
+            "when": "adapt_run is unavailable or you need step-by-step debugging.",
+            "action": "Run backup_run -> copy_param -> rundir_realizations -> clean_rundir_tmp, then run.",
+            "status": "available" if include_submit_commands else "prepare_only",
+            "target_detection": adapt_detection,
+        },
+    ]
+
+    workflow_guidance = [
+        "Interpret this run plan as guidance-first: validate variables and target availability before shell execution.",
+        "Choose between adapt_run and manual prepare/submit branches using decision_branches and Makefile capabilities.",
+        "Apply planned_non_shell_steps before or alongside shell steps to keep PARAM mutations consistent.",
+    ]
+
     return {
         "run_id": run_id,
         "simdir": simdir,
@@ -532,7 +614,11 @@ def _plan_single_run(
         "param_mutations": entry.get("param_mutations", {}),
         "make_variables": dict(make_vars),
         "key_params_preview": key_params_preview,
-        "command_groups": {
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "optional_command_examples": {
+            "full_sequence": [*prepare_shell, *submit_shell],
             "prepare_shell": prepare_shell,
             "submit_shell": submit_shell,
             "adapt_run_shell": adapt_run_shell,
@@ -579,6 +665,13 @@ def plan_solar_campaign(
     makefile_defaults: dict[str, str] = {}
     makefile_targets: set[str] = set()
     warnings: list[str] = list(parsed.get("warnings", []))
+    makefile_discovery: dict[str, Any] = {
+        "detected": False,
+        "swmfsolar_root_resolved": swmfsolar_root_resolved,
+        "makefile_path": None,
+        "capabilities": None,
+        "warnings": [],
+    }
 
     if swmfsolar_root_resolved:
         makefile_discovery = _discover_swmfsolar_makefile(
@@ -597,6 +690,10 @@ def plan_solar_campaign(
             makefile_targets = {str(item) for item in capabilities.get("targets", [])}
 
     include_adapt_run_commands = include_submit_commands
+    adapt_run_target_detected: bool | None = None
+    if swmfsolar_root_resolved and makefile_targets:
+        adapt_run_target_detected = "adapt_run" in makefile_targets
+
     if include_adapt_run_commands and swmfsolar_root_resolved and makefile_targets and "adapt_run" not in makefile_targets:
         warnings.append("SWMFSOLAR Makefile does not expose target 'adapt_run'; adapt_run command group may not execute as-is.")
 
@@ -606,6 +703,7 @@ def plan_solar_campaign(
             include_submit_commands=include_submit_commands,
             makefile_default_variables=makefile_defaults,
             include_adapt_run_commands=include_adapt_run_commands,
+            adapt_run_target_detected=adapt_run_target_detected,
         )
         for item in selected_runs
     ]
@@ -625,9 +723,10 @@ def plan_solar_campaign(
     submit_commands: list[str] = []
     adapt_run_commands: list[str] = []
     for run_plan in run_plans:
-        prepare_commands.extend(run_plan["command_groups"]["prepare_shell"])
-        submit_commands.extend(run_plan["command_groups"]["submit_shell"])
-        adapt_run_commands.extend(run_plan["command_groups"].get("adapt_run_shell", []))
+        run_examples = dict(run_plan.get("optional_command_examples", {}))
+        prepare_commands.extend([str(item) for item in run_examples.get("prepare_shell", [])])
+        submit_commands.extend([str(item) for item in run_examples.get("submit_shell", [])])
+        adapt_run_commands.extend([str(item) for item in run_examples.get("adapt_run_shell", [])])
         warnings.extend(run_plan.get("warnings", []))
 
     command_preview = [*compile_commands, *prepare_commands, *submit_commands]
@@ -635,10 +734,84 @@ def plan_solar_campaign(
         command_preview = [f"cd {swmfsolar_root_resolved}", *command_preview]
 
     source_paths = list(parsed.get("source_paths", []))
+    discovered_capabilities: dict[str, Any] = {}
+    if swmfsolar_root_resolved and isinstance(makefile_discovery.get("capabilities"), dict):
+        discovered_capabilities = dict(makefile_discovery["capabilities"])
+
     if swmfsolar_root_resolved:
         makefile = Path(swmfsolar_root_resolved) / "Makefile"
         if makefile.is_file():
             source_paths.append(str(makefile.resolve()))
+    readme_path = discovered_capabilities.get("readme_path")
+    if isinstance(readme_path, str) and readme_path:
+        source_paths.append(readme_path)
+
+    variable_guidance = {
+        "MODEL": {
+            "description": "Model selection should be reconciled between event list entries, Makefile supported models, and compile target usage.",
+            "default_hint": makefile_defaults.get("model"),
+        },
+        "PFSS": {
+            "description": "PFSS choice influences map preprocessing and run preparation paths.",
+            "default_hint": makefile_defaults.get("pfss"),
+        },
+        "REALIZATIONS": {
+            "description": "Realization expansion should follow map family and campaign goals; ADAPT often uses multiple realizations.",
+            "default_hint": makefile_defaults.get("realizations"),
+        },
+        "JOBNAME": {
+            "description": "Job names are environment-dependent and should encode run identifiers meaningful to your scheduler queue.",
+            "default_hint": makefile_defaults.get("jobname"),
+        },
+        "MACHINE": {
+            "description": "Machine value should match cluster-specific presets consumed by your Makefile and scripts.",
+            "default_hint": makefile_defaults.get("machine"),
+        },
+    }
+
+    target_recipes = dict(discovered_capabilities.get("target_recipes", {}))
+    scheduler_branches = list(discovered_capabilities.get("scheduler_branches", []))
+    environment_prerequisites = [str(item) for item in discovered_capabilities.get("environment_prerequisites", [])]
+    help_variable_descriptions = dict(discovered_capabilities.get("help_variable_descriptions", {}))
+
+    for key in ["MODEL", "PFSS", "REALIZATIONS", "JOBNAME", "MACHINE", "TIME", "MAP", "PARAM", "POYNTINGFLUX", "DOINSTALL"]:
+        if key in variable_guidance and key in help_variable_descriptions:
+            variable_guidance[key]["source_description"] = help_variable_descriptions[key]
+
+    workflow_guidance = [
+        "Treat command outputs as optional examples; validate Makefile targets and defaults in your active SWMFSOLAR tree first.",
+        "Use per-run variable_guidance and decision_branches to adapt commands for your scheduler, filesystem layout, and campaign needs.",
+        "Prefer adapt_run when available for robust directory-context handling; otherwise use manual prepare and submit stages.",
+    ]
+
+    decision_branches = [
+        {
+            "name": "use_adapt_run",
+            "when": "Makefile target adapt_run is available and include_submit_commands=True.",
+            "action": "Use optional_command_examples.adapt_run as a compact workflow example.",
+            "status": "available" if include_submit_commands else "disabled",
+            "target_detection": "detected"
+            if adapt_run_target_detected is True
+            else ("not_detected" if adapt_run_target_detected is False else "unknown"),
+        },
+        {
+            "name": "manual_prepare_submit",
+            "when": "adapt_run target is unavailable or debugging requires split steps.",
+            "action": "Use optional_command_examples.prepare and optional_command_examples.submit examples with environment-specific edits.",
+            "status": "available" if include_submit_commands else "prepare_only",
+            "target_detection": "detected"
+            if adapt_run_target_detected is True
+            else ("not_detected" if adapt_run_target_detected is False else "unknown"),
+        },
+    ]
+
+    assumptions: list[str] = []
+    if not swmfsolar_root_resolved:
+        assumptions.append("SWMFSOLAR root could not be resolved from run_dir/event list path; guidance may rely on generic defaults.")
+    if adapt_run_target_detected is None:
+        assumptions.append("adapt_run target detection was not authoritative because Makefile capabilities were not fully discoverable.")
+    if include_submit_commands is False:
+        assumptions.append("Submit-stage guidance is intentionally disabled by include_submit_commands=False.")
 
     return {
         "ok": True,
@@ -652,8 +825,16 @@ def plan_solar_campaign(
         "selected_run_ids_expression": parsed.get("selected_run_ids_expression"),
         "selected_run_count": len(run_plans),
         "runs": run_plans,
-        "command_preview": command_preview,
-        "command_groups": {
+        "guidance_mode": "instruction_first",
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "target_recipes": target_recipes,
+        "scheduler_branches": scheduler_branches,
+        "environment_prerequisites": environment_prerequisites,
+        "assumptions": assumptions,
+        "optional_command_examples": {
+            "full_sequence": command_preview,
             "compile": compile_commands,
             "prepare": prepare_commands,
             "submit": submit_commands,
@@ -663,8 +844,8 @@ def plan_solar_campaign(
         "authority": "derived",
         "source_kind": "script",
         "source_paths": sorted(set(source_paths)),
-        "recommended_next_steps": [
-            "Review command_preview and planned_non_shell_steps for each run.",
+        "guided_next_steps": [
+            "Review optional command examples and planned_non_shell_steps for each run.",
             "Run swmf_generate_param_from_template or swmf_validate_param for additional preflight checks.",
             "Execute commands manually in SWMFSOLAR after validation.",
         ],
@@ -691,6 +872,128 @@ def _extract_makefile_targets(makefile_text: str) -> list[str]:
             targets.append(target)
 
     return targets
+
+
+def _extract_makefile_target_recipe(makefile_text: str, target: str) -> list[str]:
+    lines = makefile_text.splitlines()
+    start_index: int | None = None
+
+    for index, line in enumerate(lines):
+        if re.match(rf"^\s*{re.escape(target)}\s*:", line):
+            start_index = index + 1
+            break
+
+    if start_index is None:
+        return []
+
+    recipe: list[str] = []
+    for line in lines[start_index:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if re.match(r"^[A-Za-z][A-Za-z0-9_]*\s*:", line):
+            break
+
+        if line.startswith("\t") or line.startswith(" "):
+            recipe.append(stripped)
+            continue
+
+        if stripped.startswith("#"):
+            continue
+
+        break
+
+    return recipe
+
+
+def _extract_make_subtargets(recipe_lines: list[str]) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for line in recipe_lines:
+        for match in re.finditer(r"\bmake\s+([A-Za-z][A-Za-z0-9_]*)", line):
+            target = match.group(1)
+            if target not in seen:
+                seen.add(target)
+                targets.append(target)
+    return targets
+
+
+def _extract_help_variable_descriptions(makefile_text: str) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for line in makefile_text.splitlines():
+        if "@echo" not in line or " - " not in line or "=" not in line:
+            continue
+
+        quote_match = re.search(r'@echo\s+"(.+?)"\s*$', line)
+        if quote_match is None:
+            continue
+
+        message = quote_match.group(1).strip()
+        if " - " not in message:
+            continue
+
+        left, description = message.split(" - ", 1)
+        if "=" not in left:
+            continue
+
+        name, default_hint = left.split("=", 1)
+        variable = name.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", variable):
+            continue
+
+        result[variable] = {
+            "default_hint": default_hint.strip(),
+            "description": description.strip(),
+        }
+
+    return result
+
+
+def _extract_scheduler_branches(makefile_text: str) -> list[dict[str, str]]:
+    run_recipe = "\n".join(_extract_makefile_target_recipe(makefile_text, "run"))
+    if not run_recipe:
+        return []
+
+    branches: list[dict[str, str]] = []
+    for machine in re.findall(r'MACHINE\}"\s*==\s*"([^"]+)"', run_recipe):
+        submit_command = "unknown"
+        if machine == "frontera" and "sbatch" in run_recipe:
+            submit_command = "sbatch job.long"
+        elif machine == "pfe" and "qsub.pfe.pbspl.pl" in run_recipe:
+            submit_command = "./qsub.pfe.pbspl.pl job.long <jobname>"
+        elif machine == "derecho" and "qsub job.long" in run_recipe:
+            submit_command = "qsub job.long"
+
+        branches.append(
+            {
+                "machine": machine,
+                "submit_command": submit_command,
+                "source": "run_target_recipe",
+            }
+        )
+
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in branches:
+        key = item["machine"]
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _extract_readme_prerequisites(readme_text: str) -> list[str]:
+    prerequisites: list[str] = []
+    for raw in readme_text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if "required" in lowered or "must" in lowered:
+            prerequisites.append(line)
+    return prerequisites
 
 
 def _extract_makefile_supported_models(makefile_text: str) -> list[str]:
@@ -766,6 +1069,38 @@ def _discover_swmfsolar_makefile(run_dir: str | None, swmf_root_resolved: str) -
         if not supported_pfss:
             supported_pfss = ["HARMONICS", "FDIPS"]
 
+        recipe_targets = [
+            "adapt_run_w_compile",
+            "adapt_run",
+            "rundir_local",
+            "compile",
+            "backup_run",
+            "copy_param",
+            "rundir_realizations",
+            "clean_rundir_tmp",
+            "run",
+        ]
+        target_recipes: dict[str, list[str]] = {}
+        for target in recipe_targets:
+            recipe = _extract_makefile_target_recipe(makefile_text, target)
+            if recipe:
+                target_recipes[target] = _extract_make_subtargets(recipe)
+
+        help_variable_descriptions = _extract_help_variable_descriptions(makefile_text)
+        scheduler_branches = _extract_scheduler_branches(makefile_text)
+
+        readme_path = resolved / "README"
+        readme_prerequisites: list[str] = []
+        warnings: list[str] = []
+        if readme_path.is_file():
+            try:
+                readme_text = readme_path.read_text(encoding="utf-8")
+                readme_prerequisites = _extract_readme_prerequisites(readme_text)
+            except OSError as exc:
+                warnings.append(f"Failed to read SWMFSOLAR README: {exc}")
+        else:
+            warnings.append(f"SWMFSOLAR README was not found at {readme_path}.")
+
         capabilities = {
             "targets": targets,
             "workflow_targets": [target for target in _SWMFSOLAR_QUICKRUN_TARGETS if target in target_set],
@@ -774,6 +1109,11 @@ def _discover_swmfsolar_makefile(run_dir: str | None, swmf_root_resolved: str) -
             "supported_models": supported_models,
             "supported_pfss": supported_pfss,
             "uses_change_awsom_param": "change_awsom_param.py" in makefile_text,
+            "target_recipes": target_recipes,
+            "scheduler_branches": scheduler_branches,
+            "help_variable_descriptions": help_variable_descriptions,
+            "environment_prerequisites": readme_prerequisites,
+            "readme_path": str(readme_path) if readme_path.is_file() else None,
         }
 
         return {
@@ -781,7 +1121,7 @@ def _discover_swmfsolar_makefile(run_dir: str | None, swmf_root_resolved: str) -
             "swmfsolar_root_resolved": str(resolved),
             "makefile_path": str(makefile.resolve()),
             "capabilities": capabilities,
-            "warnings": [],
+            "warnings": warnings,
         }
 
     return {
@@ -943,6 +1283,65 @@ def _build_swmfsolar_make_quickrun_plan(
     if swmfsolar_root_resolved:
         command_preview = [f"cd {swmfsolar_root_resolved}", *command_preview]
 
+    decision_branches = [
+        {
+            "name": "adapt_run_available",
+            "when": "adapt_run target exists in SWMFSOLAR Makefile.",
+            "action": "Use optional_command_examples.adapt_run optional example path.",
+            "status": "available" if bool(adapt_run_commands) else "unavailable",
+        },
+        {
+            "name": "split_prepare_submit",
+            "when": "adapt_run is unavailable or stepwise debugging is preferred.",
+            "action": "Use optional_command_examples.prepare then optional_command_examples.submit optional examples.",
+            "status": "available",
+        },
+    ]
+
+    variable_guidance = {
+        "MODEL": {
+            "selected": model,
+            "supported_values": supported_models,
+            "description": "Should be supported by Makefile model checks and aligned with selected quickrun mode.",
+        },
+        "PFSS": {
+            "selected": pfss,
+            "supported_values": supported_pfss,
+            "description": "PFSS mode influences magnetic preprocessing route and matching script arguments.",
+        },
+        "REALIZATIONS": {
+            "selected": realizations_expression,
+            "source": realizations_source,
+            "description": "Chosen from FITS/map hints or Makefile defaults; adjust for campaign breadth and resource limits.",
+        },
+        "SIMDIR": {
+            "selected": simdir,
+            "description": "Run directory stem used by backup, prepare, and submission targets.",
+        },
+        "MACHINE": {
+            "selected": machine,
+            "description": "Optional machine preset consumed by Makefile-specific scheduler wrappers.",
+        },
+        "JOBNAME": {
+            "selected": jobname,
+            "description": "Queue-visible label used by run/adapt_run submit flows.",
+        },
+    }
+
+    target_recipes = dict(capabilities.get("target_recipes", {}))
+    scheduler_branches = list(capabilities.get("scheduler_branches", []))
+    environment_prerequisites = [str(item) for item in capabilities.get("environment_prerequisites", [])]
+    help_variable_descriptions = dict(capabilities.get("help_variable_descriptions", {}))
+    for key in ["MODEL", "PFSS", "TIME", "MAP", "PARAM", "REALIZATIONS", "JOBNAME", "POYNTINGFLUX", "MACHINE", "DOINSTALL"]:
+        if key in variable_guidance and key in help_variable_descriptions:
+            variable_guidance[key]["source_description"] = help_variable_descriptions[key]
+
+    workflow_guidance = [
+        "Inspect SWMFSOLAR Makefile targets and defaults before executing examples in a cluster environment.",
+        "Select an execution branch using decision_branches and then customize variables for your scheduler/accounting policy.",
+        "Treat command examples as templates; validate directories and file paths (MAP, PARAM, SIMDIR) in your runtime context.",
+    ]
+
     return {
         "variables": {
             "model": model,
@@ -958,13 +1357,19 @@ def _build_swmfsolar_make_quickrun_plan(
             "machine": machine,
             "doinstall": doinstall,
         },
-        "command_groups": {
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "target_recipes": target_recipes,
+        "scheduler_branches": scheduler_branches,
+        "environment_prerequisites": environment_prerequisites,
+        "optional_command_examples": {
+            "full_sequence": command_preview,
             "compile": compile_commands,
             "prepare": prepare_commands,
             "submit": submit_commands,
             "adapt_run": adapt_run_commands,
         },
-        "command_preview": command_preview,
         "warnings": warnings,
     }
 
@@ -1109,33 +1514,98 @@ def _prepare_sc_quickrun_from_magnetogram(
     if template_payload.get("template_found") is False:
         external_input_warnings.append("No solar PARAM template was found; returned a heuristic skeleton for manual review.")
 
-    recommended_build_steps = list(build_plan.get("suggested_commands", []))
-    recommended_run_steps = list(prepare_run_plan.get("suggested_commands", []))
-    swmfsolar_command_groups: dict[str, list[str]] = {"compile": [], "prepare": [], "submit": [], "adapt_run": []}
-    swmfsolar_command_preview: list[str] = []
+    build_examples = dict(build_plan.get("optional_command_examples", {}))
+    run_examples = dict(prepare_run_plan.get("optional_command_examples", {}))
+    recommended_build_steps = [str(item) for item in build_examples.get("full_sequence", [])]
+    recommended_run_steps = [str(item) for item in run_examples.get("full_sequence", [])]
+    swmfsolar_command_examples: dict[str, list[str]] = {
+        "compile": [],
+        "prepare": [],
+        "submit": [],
+        "adapt_run": [],
+        "full_sequence": [],
+    }
     swmfsolar_recommended_variables: dict[str, Any] | None = None
     if swmfsolar_make_plan is not None:
-        swmfsolar_command_groups = dict(swmfsolar_make_plan.get("command_groups", swmfsolar_command_groups))
-        swmfsolar_command_preview = list(swmfsolar_make_plan.get("command_preview", []))
+        plan_examples = dict(swmfsolar_make_plan.get("optional_command_examples", {}))
+        swmfsolar_command_examples = {
+            "compile": [str(item) for item in plan_examples.get("compile", [])],
+            "prepare": [str(item) for item in plan_examples.get("prepare", [])],
+            "submit": [str(item) for item in plan_examples.get("submit", [])],
+            "adapt_run": [str(item) for item in plan_examples.get("adapt_run", [])],
+            "full_sequence": [str(item) for item in plan_examples.get("full_sequence", [])],
+        }
         swmfsolar_recommended_variables = dict(swmfsolar_make_plan.get("variables", {}))
-        recommended_build_steps = list(swmfsolar_command_groups.get("compile", [])) or recommended_build_steps
+        recommended_build_steps = list(swmfsolar_command_examples.get("compile", [])) or recommended_build_steps
         recommended_run_steps = (
-            list(swmfsolar_command_groups.get("adapt_run", []))
+            list(swmfsolar_command_examples.get("adapt_run", []))
             or [
-                *swmfsolar_command_groups.get("prepare", []),
-                *swmfsolar_command_groups.get("submit", []),
+                *swmfsolar_command_examples.get("prepare", []),
+                *swmfsolar_command_examples.get("submit", []),
             ]
             or recommended_run_steps
         )
+
+    quickrun_workflow_guidance = [
+        "Use this payload as guidance-first output: inspect capability fields and variable guidance before execution.",
+        "Prioritize SWMFSOLAR Makefile-driven branches when detected; otherwise fall back to generic SWMF build/run guidance.",
+        "Run validation_plan checks before submission and treat command examples as editable templates.",
+    ]
+    quickrun_decision_branches = [
+        {
+            "name": "swmfsolar_makefile_branch",
+            "when": "SWMFSOLAR Makefile is detected and capability extraction succeeds.",
+            "action": "Use optional_command_examples.swmfsolar_commands.adapt_run with variable overrides from swmfsolar_recommended_variables.",
+            "status": "available" if swmfsolar_make_plan is not None else "unavailable",
+        },
+        {
+            "name": "generic_swmf_branch",
+            "when": "SWMFSOLAR Makefile is missing or incomplete.",
+            "action": "Use optional_command_examples.generic_swmf commands and re-check paths/targets manually.",
+            "status": "fallback",
+        },
+    ]
+
+    variable_guidance: dict[str, Any] = {}
+    target_recipes: dict[str, Any] = {}
+    scheduler_branches: list[dict[str, Any]] = []
+    environment_prerequisites: list[str] = []
+    if swmfsolar_make_plan is not None:
+        variable_guidance = dict(swmfsolar_make_plan.get("variable_guidance", {}))
+        target_recipes = dict(swmfsolar_make_plan.get("target_recipes", {}))
+        scheduler_branches = list(swmfsolar_make_plan.get("scheduler_branches", []))
+        environment_prerequisites = [str(item) for item in swmfsolar_make_plan.get("environment_prerequisites", [])]
+    else:
+        variable_guidance = {
+            "MODEL": {
+                "description": "Model defaults to quickrun heuristics unless explicitly provided.",
+                "selected": model,
+            },
+            "SIMDIR": {
+                "description": "SIMDIR defaults to run_dir basename or quick_<mode>.",
+                "selected": inferred_simdir,
+            },
+            "NPROC": {
+                "description": "NP inferred from job script when possible; otherwise heuristic default may be used.",
+                "selected": inferred_nproc,
+                "source": inferred_nproc_source,
+            },
+        }
 
     source_paths = list(template_payload.get("source_paths", []))
     makefile_path = makefile_discovery.get("makefile_path")
     if isinstance(makefile_path, str) and makefile_path:
         source_paths.append(makefile_path)
+    discovered_capabilities = makefile_discovery.get("capabilities")
+    if isinstance(discovered_capabilities, dict):
+        readme_path = discovered_capabilities.get("readme_path")
+        if isinstance(readme_path, str) and readme_path:
+            source_paths.append(readme_path)
 
     return {
         "ok": True,
         "heuristic": True,
+        "guidance_mode": "instruction_first",
         "authority": "heuristic",
         "source_kind": "curated",
         "source_paths": sorted(set(source_paths)),
@@ -1145,13 +1615,11 @@ def _prepare_sc_quickrun_from_magnetogram(
             "suggested_param_template_text",
             "solar_alignment_hints",
             "swmfsolar_makefile_capabilities",
-            "swmfsolar_command_preview",
+            "optional_command_examples",
         ],
         "fits_inspection": inspect_result,
         "recommended_components": recommended_components,
-        "recommended_config_pl_command": config_hint.get("recommended_config_command") or build_plan.get("suggested_commands", [None])[1],
-        "recommended_build_steps": recommended_build_steps,
-        "recommended_run_steps": recommended_run_steps,
+        "recommended_config_pl_command": config_hint.get("recommended_config_command"),
         "inferred_nproc": inferred_nproc,
         "inferred_nproc_source": inferred_nproc_source,
         "job_layout": layout_payload,
@@ -1160,8 +1628,21 @@ def _prepare_sc_quickrun_from_magnetogram(
         "swmfsolar_makefile_path": makefile_path,
         "swmfsolar_makefile_capabilities": makefile_discovery.get("capabilities"),
         "swmfsolar_recommended_variables": swmfsolar_recommended_variables,
-        "swmfsolar_command_groups": swmfsolar_command_groups,
-        "swmfsolar_command_preview": swmfsolar_command_preview,
+        "workflow_guidance": quickrun_workflow_guidance,
+        "decision_branches": quickrun_decision_branches,
+        "variable_guidance": variable_guidance,
+        "target_recipes": target_recipes,
+        "scheduler_branches": scheduler_branches,
+        "environment_prerequisites": environment_prerequisites,
+        "optional_command_examples": {
+            "swmfsolar_commands": swmfsolar_command_examples,
+            "selected_build_sequence": recommended_build_steps,
+            "selected_run_sequence": recommended_run_steps,
+            "generic_swmf": {
+                "build": [str(item) for item in build_examples.get("full_sequence", [])],
+                "run": [str(item) for item in run_examples.get("full_sequence", [])],
+            },
+        },
         "suggested_param_template_text": suggested_param_template_text,
         "suggested_param_patch_summary": template_payload.get("suggested_param_patch_summary", []),
         "solar_alignment_hints": [
@@ -1248,9 +1729,9 @@ def swmf_prepare_solar_quickrun_from_magnetogram(
 
 def register(app: Any) -> None:
     app.tool(description="Parse SWMFSOLAR event-list entries into normalized campaign run specs.")(swmf_parse_solar_event_list)
-    app.tool(description="Prepare a dry-run SWMFSOLAR campaign plan (compile/prepare/submit command preview only).")(
+    app.tool(description="Prepare a guidance-first SWMFSOLAR campaign plan with optional command examples.")(
         swmf_plan_solar_campaign
     )
-    app.tool(description="Prepare a heuristic solar quickrun plan from a magnetogram FITS file.")(
+    app.tool(description="Prepare a guidance-first heuristic solar quickrun plan from a magnetogram FITS file.")(
         swmf_prepare_solar_quickrun_from_magnetogram
     )

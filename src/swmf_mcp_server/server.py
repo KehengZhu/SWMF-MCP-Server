@@ -85,6 +85,8 @@ swmf_trace_param_command = retrieve.swmf_trace_param_command
 swmf_diagnose_param = param.swmf_diagnose_param
 swmf_diagnose_error = diagnose.swmf_diagnose_error
 swmf_plan_restart_from_background = postprocess.swmf_plan_restart_from_background
+swmf_plan_postprocess = postprocess.swmf_plan_postprocess
+swmf_plan_resubmit = postprocess.swmf_plan_resubmit
 swmf_parse_solar_event_list = solar_campaign.swmf_parse_solar_event_list
 swmf_plan_solar_campaign = solar_campaign.swmf_plan_solar_campaign
 

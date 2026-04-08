@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -12,6 +13,468 @@ from ._helpers import resolve_root_or_failure, with_root
 
 _ALLOWED_SCHEDULER_HINTS = {"auto", "slurm", "pbs"}
 _ALLOWED_RESTART_MODES = {"auto", "framework", "standalone", "a", "f", "s"}
+_ALLOWED_POSTPROCESS_SCHEDULER_HINTS = {"auto", "slurm", "pbs"}
+
+_CURATED_RELATED_SCRIPTS = {
+    "restart": "Restart.pl",
+    "postproc": "PostProc.pl",
+    "resubmit": "Resubmit.pl",
+    "testparam": "Scripts/TestParam.pl",
+    "preplot": "Preplot.pl",
+    "convert2vtk": "convert2vtk.jl",
+}
+
+_RESTART_OPTION_KEYWORDS = {
+    "-h",
+    "-help",
+    "-o",
+    "-output",
+    "-i",
+    "-input",
+    "-c",
+    "-check",
+    "-v",
+    "-verbose",
+    "-W",
+    "-warn",
+    "-t",
+    "-u",
+    "-timeunit",
+    "-unit",
+    "-r",
+    "-repeat",
+    "-k",
+    "-keep",
+    "-l",
+    "-linkorig",
+    "-w",
+    "-wait",
+    "-m",
+    "-mode",
+}
+
+_POSTPROC_OPTION_KEYWORDS = {
+    "-h",
+    "-help",
+    "-v",
+    "-verbose",
+    "-c",
+    "-cat",
+    "-g",
+    "-gzip",
+    "-m",
+    "-movie",
+    "-M",
+    "-MOVIE",
+    "-t",
+    "-tar",
+    "-T",
+    "-TAR",
+    "-noptec",
+    "-vtu",
+    "-vtk",
+    "-n",
+    "-p",
+    "-q",
+    "-r",
+    "-repeat",
+    "-replace",
+    "-s",
+    "-stop",
+    "-allparam",
+    "-rsync",
+    "-sync",
+    "-l",
+    "-link",
+    "-f",
+    "-format",
+}
+
+
+def _read_text_if_file(path: Path | None) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+
+def _dedupe_preserve(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _find_path_search_candidates(
+    search_roots: list[Path],
+    expected_entries: list[str],
+    max_depth: int = 2,
+    max_results: int = 12,
+) -> list[str]:
+    expected = {item for item in expected_entries if item}
+    if not expected:
+        return []
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = set()
+
+    for raw_root in search_roots:
+        root = raw_root if raw_root.is_dir() else raw_root.parent
+        if not root.exists() or not root.is_dir():
+            continue
+
+        queue: list[tuple[Path, int]] = [(root.resolve(), 0)]
+        seen_dirs: set[Path] = set()
+
+        while queue and len(candidates) < max_results:
+            current, depth = queue.pop(0)
+            if current in seen_dirs:
+                continue
+            seen_dirs.add(current)
+
+            try:
+                children = list(current.iterdir())
+            except OSError:
+                continue
+
+            child_names = {item.name for item in children}
+            if child_names.intersection(expected):
+                current_text = str(current)
+                if current_text not in seen_candidates:
+                    seen_candidates.add(current_text)
+                    candidates.append(current_text)
+
+            if depth >= max_depth:
+                continue
+
+            subdirs = sorted((item for item in children if item.is_dir()), key=lambda item: item.name)
+            for subdir in subdirs:
+                queue.append((subdir.resolve(), depth + 1))
+
+            if len(candidates) >= max_results:
+                break
+
+    return candidates
+
+
+def _build_path_search_guidance(
+    path_role: str,
+    search_roots: list[Path],
+    expected_entries: list[str],
+) -> dict[str, Any]:
+    expected = [entry for entry in expected_entries if entry]
+    expected_text = ", ".join(expected) if expected else "the expected run artifacts"
+    roots = _dedupe_preserve(
+        [
+            str((root if root.is_dir() else root.parent).resolve())
+            for root in search_roots
+            if (root if root.is_dir() else root.parent).exists()
+        ]
+    )
+    candidates = _find_path_search_candidates(search_roots=search_roots, expected_entries=expected)
+
+    return {
+        "path_search_hints": [
+            f"Verify {path_role} points to the directory that directly contains {expected_text}.",
+            "If lookup fails, inspect child directories first, then parent and sibling directories, and retry with the corrected path.",
+            "When uncertain, run a file search for marker files/directories and pass the discovered path back into the tool input.",
+        ],
+        "path_search_roots": roots,
+        "path_search_candidates": candidates,
+    }
+
+
+def _resolve_related_script(run_dir: Path, swmf_root: Path, script_ref: str) -> Path | None:
+    script_path = Path(script_ref)
+    basename = script_path.name
+
+    candidates: list[Path] = []
+    if script_path.parts and len(script_path.parts) > 1:
+        candidates.extend(
+            [
+                run_dir / script_path,
+                swmf_root / script_path,
+                swmf_root / "share" / script_path,
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                run_dir / basename,
+                run_dir / "Scripts" / basename,
+                run_dir / "share" / "Scripts" / basename,
+                run_dir / "share" / "scripts" / basename,
+                swmf_root / basename,
+                swmf_root / "Scripts" / basename,
+                swmf_root / "share" / "Scripts" / basename,
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    if len(script_path.parts) == 1:
+        for search_root in [run_dir, swmf_root / "Scripts", swmf_root / "share" / "Scripts"]:
+            if not search_root.exists():
+                continue
+            discovered: list[Path] = []
+            try:
+                for candidate in search_root.rglob(basename):
+                    if not candidate.is_file():
+                        continue
+                    try:
+                        rel_parts = candidate.resolve().relative_to(search_root.resolve()).parts
+                    except ValueError:
+                        rel_parts = ()
+                    if len(rel_parts) <= 6:
+                        discovered.append(candidate.resolve())
+            except OSError:
+                discovered = []
+            if discovered:
+                discovered.sort(key=lambda p: (len(p.parts), str(p)))
+                return discovered[0]
+
+    return None
+
+
+def _discover_related_scripts(run_dir: Path, swmf_root: Path) -> dict[str, Any]:
+    scripts: dict[str, str | None] = {}
+    source_paths: list[str] = []
+    warnings: list[str] = []
+
+    for key, ref in _CURATED_RELATED_SCRIPTS.items():
+        resolved = _resolve_related_script(run_dir, swmf_root, ref)
+        scripts[key] = str(resolved) if resolved is not None else None
+        if resolved is not None:
+            source_paths.append(str(resolved))
+        elif key in {"restart", "postproc", "resubmit"}:
+            warnings.append(f"Curated script was not found for {key}: {ref}")
+
+    return {
+        "scripts": scripts,
+        "source_paths": _dedupe_preserve(source_paths),
+        "warnings": warnings,
+    }
+
+
+def _extract_perl_help_options(script_text: str) -> list[dict[str, Any]]:
+    in_usage = False
+    in_examples = False
+    options: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    for raw_line in script_text.splitlines():
+        line = raw_line.rstrip()
+
+        if line.strip() == "Usage:":
+            in_usage = True
+            in_examples = False
+            continue
+        if line.strip().startswith("Examples"):
+            in_examples = True
+            continue
+        if in_examples:
+            continue
+        if not in_usage:
+            continue
+
+        option_line = re.match(r"^\s+(-\S(?:.*?))(?:\s{2,}|\t+)(.+)$", line)
+        if option_line:
+            option_text = option_line.group(1).strip()
+            description = option_line.group(2).strip()
+            aliases = re.findall(r"-[A-Za-z][A-Za-z0-9]*(?:=[A-Za-z0-9_]+)?", option_text)
+            if not aliases:
+                continue
+
+            current = {
+                "aliases": aliases,
+                "description": description,
+                "takes_value": any("=" in alias for alias in aliases),
+            }
+            options.append(current)
+            continue
+
+        if current is not None:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("-"):
+                current["description"] = f"{current['description']} {stripped}".strip()
+
+    deduped: list[dict[str, Any]] = []
+    seen_alias_key: set[str] = set()
+    for item in options:
+        alias_key = ",".join(item.get("aliases", []))
+        if alias_key in seen_alias_key:
+            continue
+        seen_alias_key.add(alias_key)
+        deduped.append(item)
+    return deduped
+
+
+def _extract_perl_hash_map(script_text: str, hash_name: str) -> dict[str, str]:
+    block_match = re.search(rf"%{re.escape(hash_name)}\s*=\s*\((.*?)\);", script_text, flags=re.S)
+    if block_match is None:
+        return {}
+    body = block_match.group(1)
+    pairs = re.findall(r'"?([A-Za-z0-9_]+)"?\s*=>\s*"([^\"]+)"', body)
+    return {str(key): str(value) for key, value in pairs}
+
+
+def _extract_perl_string_scalars(script_text: str) -> dict[str, str]:
+    pairs = re.findall(r"my\s+\$(\w+)\s*=\s*\"([^\"]+)\"", script_text)
+    return {str(key): str(value) for key, value in pairs}
+
+
+def _filter_option_reference(
+    options: list[dict[str, Any]],
+    allowed_aliases: set[str],
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for item in options:
+        aliases = [str(alias) for alias in item.get("aliases", [])]
+        if not aliases:
+            continue
+        if not any(alias.split("=", 1)[0] in allowed_aliases for alias in aliases):
+            continue
+        filtered.append(
+            {
+                "aliases": aliases,
+                "description": str(item.get("description", "")).strip(),
+                "takes_value": bool(item.get("takes_value", False)),
+            }
+        )
+    return filtered
+
+
+def _extract_restart_knowledge(script_path: Path | None) -> dict[str, Any]:
+    script_text = _read_text_if_file(script_path)
+    if script_text is None:
+        return {
+            "detected": False,
+            "option_reference": [],
+            "time_unit_reference": [],
+            "component_mappings": [],
+            "control_files": {},
+            "warnings": ["Restart.pl content could not be read for source-grounded guidance."],
+        }
+
+    options = _extract_perl_help_options(script_text)
+    filtered_options = _filter_option_reference(options, _RESTART_OPTION_KEYWORDS)
+    unit_map = _extract_perl_hash_map(script_text, "UnitSecond")
+    out_dir = _extract_perl_hash_map(script_text, "RestartOutDir")
+    in_dir = _extract_perl_hash_map(script_text, "RestartInDir")
+    scalars = _extract_perl_string_scalars(script_text)
+
+    component_mappings: list[dict[str, str]] = []
+    components = sorted(set(out_dir.keys()) | set(in_dir.keys()))
+    for comp in components:
+        component_mappings.append(
+            {
+                "component": comp,
+                "restart_out_dir": out_dir.get(comp, ""),
+                "restart_in_dir": in_dir.get(comp, ""),
+            }
+        )
+
+    time_unit_reference = [
+        {
+            "unit": unit,
+            "seconds": seconds,
+        }
+        for unit, seconds in unit_map.items()
+    ]
+
+    control_files: dict[str, str] = {}
+    for key in ["RestartOutFile", "RestartInFile"]:
+        if key in scalars:
+            control_files[key] = scalars[key]
+
+    return {
+        "detected": True,
+        "option_reference": filtered_options,
+        "time_unit_reference": time_unit_reference,
+        "component_mappings": component_mappings,
+        "control_files": control_files,
+        "warnings": [],
+    }
+
+
+def _extract_postproc_knowledge(script_path: Path | None) -> dict[str, Any]:
+    script_text = _read_text_if_file(script_path)
+    if script_text is None:
+        return {
+            "detected": False,
+            "option_reference": [],
+            "plot_dir_mappings": {},
+            "control_files": {},
+            "warnings": ["PostProc.pl content could not be read for source-grounded guidance."],
+        }
+
+    options = _extract_perl_help_options(script_text)
+    filtered_options = _filter_option_reference(options, _POSTPROC_OPTION_KEYWORDS)
+    plot_dir_mappings = _extract_perl_hash_map(script_text, "PlotDir")
+    scalars = _extract_perl_string_scalars(script_text)
+
+    control_files: dict[str, str] = {}
+    for key in ["StopFile", "ParamIn", "ParamInOrig", "RunLog"]:
+        if key in scalars:
+            control_files[key] = scalars[key]
+
+    return {
+        "detected": True,
+        "option_reference": filtered_options,
+        "plot_dir_mappings": plot_dir_mappings,
+        "control_files": control_files,
+        "warnings": [],
+    }
+
+
+def _extract_resubmit_knowledge(script_path: Path | None) -> dict[str, Any]:
+    script_text = _read_text_if_file(script_path)
+    if script_text is None:
+        return {
+            "detected": False,
+            "control_files": {},
+            "scheduler_branches": [],
+            "warnings": ["Resubmit.pl content could not be read for source-grounded guidance."],
+        }
+
+    scalars = _extract_perl_string_scalars(script_text)
+    control_files: dict[str, str] = {}
+    for key in ["Success1", "Success2", "Done1", "Done2"]:
+        if key in scalars:
+            control_files[key] = scalars[key]
+
+    scheduler_branches: list[dict[str, str]] = []
+    if "qsub" in script_text:
+        scheduler_branches.append(
+            {
+                "scheduler": "pbs",
+                "detection": "#PBS in job script",
+                "submit_command": "qsub <JOBFILE>",
+            }
+        )
+    if "sbatch" in script_text:
+        scheduler_branches.append(
+            {
+                "scheduler": "slurm",
+                "detection": "#SBATCH in job script",
+                "submit_command": "sbatch <JOBFILE>",
+            }
+        )
+
+    return {
+        "detected": True,
+        "control_files": control_files,
+        "scheduler_branches": scheduler_branches,
+        "warnings": [],
+    }
 
 
 def _resolve_script(run_dir: Path, swmf_root: Path, script_name: str) -> Path:
@@ -229,6 +692,8 @@ def plan_restart_from_background(
     run_dir_exists = resolved_run_dir.is_dir()
     script = _resolve_script(resolved_run_dir, resolved_root, "Restart.pl")
     restart_script_detected = script.is_file()
+    related_discovery = _discover_related_scripts(resolved_run_dir, resolved_root)
+    restart_knowledge = _extract_restart_knowledge(script if restart_script_detected else None)
 
     resolved_background_dir = _resolve_from_run_dir(background_results_dir, resolved_run_dir)
     resolved_background_restart = (resolved_background_dir / restart_subdir).resolve()
@@ -245,8 +710,16 @@ def plan_restart_from_background(
         "restart_script_detected": restart_script_detected,
     }
 
-    warnings: list[str] = []
+    warnings: list[str] = [
+        *list(related_discovery.get("warnings", [])),
+        *list(restart_knowledge.get("warnings", [])),
+    ]
     if not run_dir_exists:
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir",
+            search_roots=[resolved_run_dir, resolved_run_dir.parent],
+            expected_entries=["PARAM.in", "RESTART.in", "RESTART", "job.long"],
+        )
         return with_root(
             {
                 "ok": False,
@@ -256,18 +729,22 @@ def plan_restart_from_background(
                 "run_dir_resolved": str(resolved_run_dir),
                 "background_restart_resolved": str(resolved_background_restart),
                 "preflight_checks": preflight,
-                "command_preview": [],
-                "command_groups": {"restart_link": [], "validate": [], "submit_preview": []},
                 "requires_manual_execution": True,
                 "authority": "authoritative",
                 "source_kind": "script",
                 "source_paths": [str(script)],
                 "warnings": warnings,
+                **path_guidance,
             },
             root,
         )
 
     if not restart_script_detected:
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir/swmf_root for Restart.pl",
+            search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
+            expected_entries=["Restart.pl", "Scripts", "share"],
+        )
         return with_root(
             {
                 "ok": False,
@@ -277,18 +754,22 @@ def plan_restart_from_background(
                 "run_dir_resolved": str(resolved_run_dir),
                 "background_restart_resolved": str(resolved_background_restart),
                 "preflight_checks": preflight,
-                "command_preview": [],
-                "command_groups": {"restart_link": [], "validate": [], "submit_preview": []},
                 "requires_manual_execution": True,
                 "authority": "authoritative",
                 "source_kind": "script",
                 "source_paths": [str(script)],
                 "warnings": warnings,
+                **path_guidance,
             },
             root,
         )
 
     if not restart_source_exists:
+        path_guidance = _build_path_search_guidance(
+            path_role="background_results_dir/restart_subdir",
+            search_roots=[resolved_background_dir, resolved_background_dir.parent, resolved_run_dir],
+            expected_entries=[restart_subdir, "RESTART", "restart"],
+        )
         return with_root(
             {
                 "ok": False,
@@ -298,13 +779,12 @@ def plan_restart_from_background(
                 "run_dir_resolved": str(resolved_run_dir),
                 "background_restart_resolved": str(resolved_background_restart),
                 "preflight_checks": preflight,
-                "command_preview": [],
-                "command_groups": {"restart_link": [], "validate": [], "submit_preview": []},
                 "requires_manual_execution": True,
                 "authority": "authoritative",
                 "source_kind": "script",
                 "source_paths": [str(script)],
                 "warnings": warnings,
+                **path_guidance,
             },
             root,
         )
@@ -384,23 +864,100 @@ def plan_restart_from_background(
             warnings.append("Could not infer scheduler from run directory; returned a manual submit placeholder.")
 
     command_preview = [*restart_group, *validate_group, *submit_group]
+    workflow_guidance = [
+        "Treat command outputs as optional examples and validate Restart.pl behavior in your local script copy.",
+        "Use restart_check before restart_link to verify tree structure and header metadata alignment.",
+        "Prefer explicit restart_mode when environment detection is ambiguous; auto mode is heuristic.",
+    ]
+    decision_branches = [
+        {
+            "name": "restart_check_then_link",
+            "when": "include_restart_check=True and Restart.pl is available.",
+            "action": "Run restart_check then restart_link command templates.",
+            "status": "available" if include_restart_check else "disabled",
+        },
+        {
+            "name": "scheduler_submit_preview",
+            "when": "include_submit_preview=True.",
+            "action": "Use submit_preview examples matching scheduler_resolved.",
+            "status": "available" if include_submit_preview else "disabled",
+            "scheduler": scheduler_resolved,
+        },
+        {
+            "name": "validation_with_testparam",
+            "when": "include_validation_commands=True and PARAM path exists.",
+            "action": "Run TestParam.pl from SWMF root using nproc_used value.",
+            "status": "available" if validate_group else "unavailable",
+        },
+    ]
+    variable_guidance = {
+        "RESTART_MODE": {
+            "selected": restart_mode_effective,
+            "source": "input_or_auto_detection",
+            "description": "Restart.pl mode controls framework vs standalone directory assumptions.",
+            "how_to_override": "Set restart_mode to framework or standalone explicitly.",
+        },
+        "SCHEDULER": {
+            "selected": scheduler_resolved,
+            "source": "scheduler_hint_or_job_script_detection",
+            "description": "Submit preview branch uses scheduler-specific command examples.",
+            "how_to_override": "Set scheduler_hint to slurm or pbs for deterministic submit preview.",
+        },
+        "NPROC": {
+            "selected": nproc_used,
+            "source": "explicit_or_job_layout_inference",
+            "description": "MPI rank count used by TestParam validation example.",
+            "how_to_override": "Pass nproc explicitly when preparing restart guidance.",
+        },
+        "WARN_ONLY": {
+            "selected": warn_only,
+            "source": "input_flag",
+            "description": "When true, Restart.pl warning mode (-W) is included in command examples.",
+            "how_to_override": "Set warn_only to False for strict failure behavior.",
+        },
+    }
+
+    environment_prerequisites = [
+        "Restart source directory must exist and contain restart tree content.",
+        "Restart.pl must be available in run directory or SWMF script paths.",
+    ]
+    if include_validation_commands:
+        environment_prerequisites.append("Scripts/TestParam.pl should be available under SWMF root for validation commands.")
+
+    assumptions: list[str] = []
+    if scheduler_resolved == "unknown":
+        assumptions.append("Scheduler inference is heuristic because job script directives were not detected.")
+    if restart_mode == "auto":
+        assumptions.append("restart_mode was auto-detected from run-directory context and may require manual override.")
+    if include_validation_commands and nproc_used is None:
+        assumptions.append("nproc could not be inferred; validation uses placeholder and requires manual value.")
+
+    script_source_paths = [
+        str(script),
+        *[str(path) for path in related_discovery.get("source_paths", []) if isinstance(path, str)],
+    ]
+    source_paths = sorted(set(script_source_paths))
+
+    authority_by_field = {
+        "restart_option_reference": "authoritative" if bool(restart_knowledge.get("option_reference")) else "heuristic",
+        "restart_time_unit_reference": "authoritative" if bool(restart_knowledge.get("time_unit_reference")) else "heuristic",
+        "restart_component_mappings": "authoritative" if bool(restart_knowledge.get("component_mappings")) else "heuristic",
+        "optional_command_examples": "derived",
+        "scheduler_resolved": "heuristic" if hint == "auto" else "input",
+        "nproc_used": "heuristic" if nproc is None else "input",
+    }
+
     payload = {
         "ok": True,
         "hard_error": False,
         "error_code": None,
+        "guidance_mode": "instruction_first",
         "message": "Generated restart/validation/submit preview commands. Nothing was executed.",
         "run_dir_resolved": str(resolved_run_dir),
         "background_restart_resolved": str(resolved_background_restart),
         "testparam_constraint": "TestParam.pl validation commands must be run from SWMF_ROOT directory.",
         "testparam_execution_note": f"Run TestParam.pl from within SWMF_ROOT: cd {str(resolved_root)} && ./Scripts/TestParam.pl -n=<nproc> <PARAM.in>",
         "preflight_checks": preflight,
-        "command_preview": command_preview,
-        "command_groups": {
-            "restart_link": restart_link_group,
-            "restart_check": restart_check_group,
-            "validate": validate_group,
-            "submit_preview": submit_group,
-        },
         "scheduler_hint": hint,
         "scheduler_resolved": scheduler_resolved,
         "restart_mode_requested": mode_normalized,
@@ -412,10 +969,27 @@ def plan_restart_from_background(
         },
         "nproc_used": nproc_used,
         "job_layout": job_layout,
+        "workflow_guidance": workflow_guidance,
+        "decision_branches": decision_branches,
+        "variable_guidance": variable_guidance,
+        "environment_prerequisites": environment_prerequisites,
+        "assumptions": assumptions,
+        "restart_option_reference": list(restart_knowledge.get("option_reference", [])),
+        "restart_time_unit_reference": list(restart_knowledge.get("time_unit_reference", [])),
+        "restart_component_mappings": list(restart_knowledge.get("component_mappings", [])),
+        "restart_control_files": dict(restart_knowledge.get("control_files", {})),
+        "authority_by_field": authority_by_field,
+        "optional_command_examples": {
+            "full_sequence": command_preview,
+            "restart_check": restart_check_group,
+            "restart_link": restart_link_group,
+            "validate": validate_group,
+            "submit_preview": submit_group,
+        },
         "requires_manual_execution": True,
         "authority": "authoritative",
         "source_kind": "script",
-        "source_paths": [str(script)],
+        "source_paths": source_paths,
         "warnings": warnings,
     }
 
@@ -424,8 +998,418 @@ def plan_restart_from_background(
         payload["hard_error"] = True
         payload["error_code"] = "PARAM_NOT_FOUND"
         payload["message"] = f"param_path does not point to a file: {resolved_param}"
+        payload.update(
+            _build_path_search_guidance(
+                path_role="param_path",
+                search_roots=[resolved_run_dir, resolved_run_dir.parent],
+                expected_entries=[Path(param_input).name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
+            )
+        )
 
     return with_root(payload, root)
+
+
+def _infer_scheduler_from_job_script(job_script: Path) -> str | None:
+    if not job_script.is_file():
+        return None
+    try:
+        text = job_script.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    if "#SBATCH" in text:
+        return "slurm"
+    if "#PBS" in text:
+        return "pbs"
+    return None
+
+
+def plan_postprocess(
+    run_dir: str,
+    output_dir: str | None = None,
+    repeat_seconds: int | None = None,
+    stop_days: int | None = None,
+    rsync_target: str | None = None,
+    include_concat: bool = False,
+    include_gzip: bool = False,
+    swmf_root: str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = resolve_run_dir(run_dir)
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    if repeat_seconds is not None and repeat_seconds <= 0:
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "INPUT_INVALID",
+                "message": "repeat_seconds must be positive when provided.",
+            },
+            root,
+        )
+    if stop_days is not None and stop_days <= 0:
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "INPUT_INVALID",
+                "message": "stop_days must be positive when provided.",
+            },
+            root,
+        )
+    if repeat_seconds is not None and output_dir is not None:
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "INPUT_INVALID",
+                "message": "PostProc.pl repeat mode (-r) cannot be combined with output collection directory.",
+            },
+            root,
+        )
+
+    resolved_root = Path(root.swmf_root_resolved or str(Path.cwd())).resolve()
+    script = _resolve_script(resolved_run_dir, resolved_root, "PostProc.pl")
+    if not script.is_file():
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir/swmf_root for PostProc.pl",
+            search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
+            expected_entries=["PostProc.pl", "Scripts", "share"],
+        )
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "POSTPROC_NOT_FOUND",
+                "message": f"Could not locate PostProc.pl under run_dir or SWMF root: {script}",
+                **path_guidance,
+            },
+            root,
+        )
+
+    related_discovery = _discover_related_scripts(resolved_run_dir, resolved_root)
+    postproc_knowledge = _extract_postproc_knowledge(script)
+    warnings: list[str] = [
+        *list(related_discovery.get("warnings", [])),
+        *list(postproc_knowledge.get("warnings", [])),
+    ]
+
+    cmd_parts = [f"perl {shlex.quote(str(script))}"]
+    if include_concat:
+        cmd_parts.append("-c")
+    if include_gzip:
+        cmd_parts.append("-g")
+    if repeat_seconds is not None:
+        cmd_parts.append(f"-r={repeat_seconds}")
+    if stop_days is not None:
+        cmd_parts.append(f"-s={stop_days}")
+    if rsync_target:
+        cmd_parts.append(f"-rsync={shlex.quote(rsync_target)}")
+    if output_dir is not None:
+        cmd_parts.append(shlex.quote(output_dir))
+
+    planned_command = " ".join(cmd_parts)
+    command_preview = [f"cd {shlex.quote(str(resolved_run_dir))}", planned_command]
+
+    workflow_guidance = [
+        "Treat PostProc.pl command previews as templates and verify component plot directories in your run tree.",
+        "Use repeat mode only for background post-processing loops; use output_dir for one-time output collection.",
+        "Enable rsync only after validating remote target access and expected transfer scope.",
+    ]
+    decision_branches = [
+        {
+            "name": "repeat_loop_mode",
+            "when": "repeat_seconds is provided.",
+            "action": "Run PostProc.pl with -r and optional -s stop_days control.",
+            "status": "available" if repeat_seconds is not None else "disabled",
+        },
+        {
+            "name": "collect_output_tree",
+            "when": "output_dir is provided and repeat mode is disabled.",
+            "action": "Collect processed outputs and restart tree into output_dir.",
+            "status": "available" if output_dir is not None else "disabled",
+        },
+        {
+            "name": "rsync_branch",
+            "when": "rsync_target is provided.",
+            "action": "Include -rsync target for local/remote synchronization.",
+            "status": "available" if bool(rsync_target) else "disabled",
+        },
+    ]
+    variable_guidance = {
+        "REPEAT_SECONDS": {
+            "selected": repeat_seconds,
+            "source": "input",
+            "description": "Controls repeat-loop cadence for background post-processing.",
+            "how_to_override": "Set repeat_seconds to enable or disable repeat mode.",
+        },
+        "STOP_DAYS": {
+            "selected": stop_days,
+            "source": "input",
+            "description": "Upper bound for repeat mode duration in days.",
+            "how_to_override": "Set stop_days explicitly when repeat mode is active.",
+        },
+        "OUTPUT_DIR": {
+            "selected": output_dir,
+            "source": "input",
+            "description": "Optional output tree destination used in non-repeat mode.",
+            "how_to_override": "Provide output_dir to collect processed outputs into a directory tree.",
+        },
+        "RSYNC_TARGET": {
+            "selected": rsync_target,
+            "source": "input",
+            "description": "Optional rsync destination passed through -rsync.",
+            "how_to_override": "Set rsync_target to enable synchronization after processing.",
+        },
+    }
+
+    environment_prerequisites = [
+        "PostProc.pl must be available from run directory or SWMF script paths.",
+        "Run directory should contain component output directories expected by PostProc.pl.",
+    ]
+    if rsync_target:
+        environment_prerequisites.append("rsync transport must be configured for the target destination.")
+
+    assumptions: list[str] = []
+    if repeat_seconds is None:
+        assumptions.append("Plan assumes one-pass post-processing because repeat_seconds was not provided.")
+    if output_dir is None:
+        assumptions.append("No output collection directory was provided; outputs remain in-place.")
+
+    source_paths = sorted(
+        set(
+            [
+                str(script),
+                *[str(path) for path in related_discovery.get("source_paths", []) if isinstance(path, str)],
+            ]
+        )
+    )
+    return with_root(
+        {
+            "ok": True,
+            "hard_error": False,
+            "error_code": None,
+            "guidance_mode": "instruction_first",
+            "message": "Generated PostProc.pl guidance and command preview. Nothing was executed.",
+            "run_dir_resolved": str(resolved_run_dir),
+            "workflow_guidance": workflow_guidance,
+            "decision_branches": decision_branches,
+            "variable_guidance": variable_guidance,
+            "environment_prerequisites": environment_prerequisites,
+            "assumptions": assumptions,
+            "postproc_option_reference": list(postproc_knowledge.get("option_reference", [])),
+            "postproc_plot_dir_mappings": dict(postproc_knowledge.get("plot_dir_mappings", {})),
+            "postproc_control_files": dict(postproc_knowledge.get("control_files", {})),
+            "optional_command_examples": {
+                "full_sequence": command_preview,
+                "postprocess": [planned_command],
+            },
+            "requires_manual_execution": True,
+            "execute_supported": False,
+            "authority": "authoritative",
+            "source_kind": "script",
+            "source_paths": source_paths,
+            "warnings": warnings,
+        },
+        root,
+    )
+
+
+def plan_resubmit(
+    run_dir: str,
+    job_script: str = "job.long",
+    sleep_seconds: int = 10,
+    scheduler_hint: str = "auto",
+    swmf_root: str | None = None,
+) -> dict[str, Any]:
+    resolved_run_dir = resolve_run_dir(run_dir)
+    failure, root = resolve_root_or_failure(swmf_root, run_dir)
+    if failure is not None or root is None:
+        return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
+
+    if sleep_seconds <= 0:
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "INPUT_INVALID",
+                "message": "sleep_seconds must be positive.",
+            },
+            root,
+        )
+
+    hint = scheduler_hint.strip().lower()
+    if hint not in _ALLOWED_POSTPROCESS_SCHEDULER_HINTS:
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "INPUT_INVALID",
+                "message": f"Unsupported scheduler_hint '{scheduler_hint}'. Use one of: auto, slurm, pbs.",
+            },
+            root,
+        )
+
+    resolved_root = Path(root.swmf_root_resolved or str(Path.cwd())).resolve()
+    script = _resolve_script(resolved_run_dir, resolved_root, "Resubmit.pl")
+    if not script.is_file():
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir/swmf_root for Resubmit.pl",
+            search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
+            expected_entries=["Resubmit.pl", "Scripts", "share"],
+        )
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "RESUBMIT_SCRIPT_NOT_FOUND",
+                "message": f"Could not locate Resubmit.pl under run_dir or SWMF root: {script}",
+                **path_guidance,
+            },
+            root,
+        )
+
+    related_discovery = _discover_related_scripts(resolved_run_dir, resolved_root)
+    resubmit_knowledge = _extract_resubmit_knowledge(script)
+    warnings: list[str] = [
+        *list(related_discovery.get("warnings", [])),
+        *list(resubmit_knowledge.get("warnings", [])),
+    ]
+
+    resolved_job_script = _resolve_from_run_dir(job_script, resolved_run_dir)
+    if not resolved_job_script.is_file():
+        path_guidance = _build_path_search_guidance(
+            path_role="job_script",
+            search_roots=[resolved_run_dir, resolved_run_dir.parent],
+            expected_entries=[Path(job_script).name, "job.long", "job.slurm", "job.pbs", "job.frontera"],
+        )
+        return with_root(
+            {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "JOB_SCRIPT_NOT_FOUND",
+                "message": f"Job script was not found: {resolved_job_script}",
+                "run_dir_resolved": str(resolved_run_dir),
+                "source_paths": sorted(set([str(script)])),
+                **path_guidance,
+            },
+            root,
+        )
+
+    scheduler_resolved = hint
+    if hint == "auto":
+        scheduler_resolved = _infer_scheduler_from_job_script(resolved_job_script) or "unknown"
+    if scheduler_resolved == "unknown":
+        warnings.append("Could not detect scheduler from job script directives; review submit command branch manually.")
+
+    relative_job_script = resolved_job_script.name
+    resubmit_command = (
+        f"perl {shlex.quote(str(script))} -s={sleep_seconds} {shlex.quote(relative_job_script)} >& Resubmit.log &"
+    )
+    command_preview = [f"cd {shlex.quote(str(resolved_run_dir))}", resubmit_command]
+    scheduler_submit_preview = [
+        "sbatch <JOBFILE>" if scheduler_resolved == "slurm" else "qsub <JOBFILE>"
+        if scheduler_resolved == "pbs"
+        else "# submit manually with site scheduler"
+    ]
+
+    param_restart_exists = (resolved_run_dir / "PARAM.in.restart").is_file()
+    param_start_exists = (resolved_run_dir / "PARAM.in.start").is_file()
+
+    workflow_guidance = [
+        "Treat Resubmit.pl command output as optional execution template and confirm scheduler directives in job script.",
+        "Resubmit loop relies on SUCCESS and DONE control files; verify these are produced by your runtime workflow.",
+        "Restart.pl handoff is expected between iterations, so keep restart script available in the run context.",
+    ]
+    decision_branches = [
+        {
+            "name": "scheduler_branch",
+            "when": "scheduler_hint or job script directive resolves scheduler.",
+            "action": "Use scheduler-specific submit behavior inside Resubmit.pl.",
+            "status": "available" if scheduler_resolved in {"slurm", "pbs"} else "unknown",
+            "scheduler": scheduler_resolved,
+        },
+        {
+            "name": "param_restart_swap",
+            "when": "PARAM.in.restart exists and PARAM.in.start is absent.",
+            "action": "Resubmit.pl will move PARAM.in to PARAM.in.start and copy PARAM.in.restart into PARAM.in.",
+            "status": "active" if (param_restart_exists and not param_start_exists) else "inactive",
+        },
+    ]
+    variable_guidance = {
+        "JOB_SCRIPT": {
+            "selected": relative_job_script,
+            "source": "input",
+            "description": "Job script used by Resubmit.pl for scheduler submissions.",
+            "how_to_override": "Pass job_script path when preparing resubmit guidance.",
+        },
+        "SLEEP_SECONDS": {
+            "selected": sleep_seconds,
+            "source": "input",
+            "description": "Polling interval for SUCCESS file checks between submissions.",
+            "how_to_override": "Set sleep_seconds to tune polling cadence.",
+        },
+        "SCHEDULER": {
+            "selected": scheduler_resolved,
+            "source": "hint_or_script_detection",
+            "description": "Scheduler branch inferred from directives or explicit scheduler_hint.",
+            "how_to_override": "Set scheduler_hint to slurm or pbs for deterministic branch selection.",
+        },
+    }
+
+    environment_prerequisites = [
+        "Resubmit.pl must be available in run directory or SWMF script paths.",
+        "Job script should include scheduler directives (#SBATCH or #PBS) for reliable scheduler detection.",
+        "Restart.pl should be available because Resubmit.pl invokes it between job iterations.",
+    ]
+    assumptions: list[str] = []
+    if scheduler_resolved == "unknown":
+        assumptions.append("Scheduler could not be detected from job script, so submit behavior may need manual adjustment.")
+    if param_start_exists:
+        assumptions.append("PARAM.in.start already exists; PARAM.in.restart swap path in Resubmit.pl may remain inactive.")
+
+    source_paths = sorted(
+        set(
+            [
+                str(script),
+                *[str(path) for path in related_discovery.get("source_paths", []) if isinstance(path, str)],
+            ]
+        )
+    )
+
+    return with_root(
+        {
+            "ok": True,
+            "hard_error": False,
+            "error_code": None,
+            "guidance_mode": "instruction_first",
+            "message": "Generated Resubmit.pl guidance and command preview. Nothing was executed.",
+            "run_dir_resolved": str(resolved_run_dir),
+            "job_script_resolved": str(resolved_job_script),
+            "scheduler_hint": hint,
+            "scheduler_resolved": scheduler_resolved,
+            "workflow_guidance": workflow_guidance,
+            "decision_branches": decision_branches,
+            "variable_guidance": variable_guidance,
+            "environment_prerequisites": environment_prerequisites,
+            "assumptions": assumptions,
+            "resubmit_control_files": dict(resubmit_knowledge.get("control_files", {})),
+            "resubmit_scheduler_branches": list(resubmit_knowledge.get("scheduler_branches", [])),
+            "optional_command_examples": {
+                "full_sequence": command_preview,
+                "resubmit": [resubmit_command],
+                "scheduler_submit_preview": scheduler_submit_preview,
+            },
+            "requires_manual_execution": True,
+            "execute_supported": False,
+            "authority": "authoritative",
+            "source_kind": "script",
+            "source_paths": source_paths,
+            "warnings": warnings,
+        },
+        root,
+    )
 
 
 def postprocess(
@@ -443,12 +1427,18 @@ def postprocess(
     resolved_root = Path(root.swmf_root_resolved or str(Path.cwd())).resolve()
     script = _resolve_script(resolved_run_dir, resolved_root, "PostProc.pl")
     if not script.is_file():
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir/swmf_root for PostProc.pl",
+            search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
+            expected_entries=["PostProc.pl", "Scripts", "share"],
+        )
         return with_root(
             {
                 "ok": False,
                 "hard_error": True,
                 "error_code": "POSTPROC_NOT_FOUND",
                 "message": f"Could not locate PostProc.pl under run_dir or SWMF root: {script}",
+                **path_guidance,
             },
             root,
         )
@@ -482,12 +1472,18 @@ def manage_restart(
     resolved_root = Path(root.swmf_root_resolved or str(Path.cwd())).resolve()
     script = _resolve_script(resolved_run_dir, resolved_root, "Restart.pl")
     if not script.is_file():
+        path_guidance = _build_path_search_guidance(
+            path_role="run_dir/swmf_root for Restart.pl",
+            search_roots=[resolved_run_dir, resolved_root, resolved_run_dir.parent],
+            expected_entries=["Restart.pl", "Scripts", "share"],
+        )
         return with_root(
             {
                 "ok": False,
                 "hard_error": True,
                 "error_code": "RESTART_SCRIPT_NOT_FOUND",
                 "message": f"Could not locate Restart.pl under run_dir or SWMF root: {script}",
+                **path_guidance,
             },
             root,
         )
@@ -570,7 +1566,47 @@ def swmf_plan_restart_from_background(
     )
 
 
+def swmf_plan_postprocess(
+    run_dir: str,
+    output_dir: str | None = None,
+    repeat_seconds: int | None = None,
+    stop_days: int | None = None,
+    rsync_target: str | None = None,
+    include_concat: bool = False,
+    include_gzip: bool = False,
+    swmf_root: str | None = None,
+) -> dict[str, Any]:
+    return plan_postprocess(
+        run_dir=run_dir,
+        output_dir=output_dir,
+        repeat_seconds=repeat_seconds,
+        stop_days=stop_days,
+        rsync_target=rsync_target,
+        include_concat=include_concat,
+        include_gzip=include_gzip,
+        swmf_root=swmf_root,
+    )
+
+
+def swmf_plan_resubmit(
+    run_dir: str,
+    job_script: str = "job.long",
+    sleep_seconds: int = 10,
+    scheduler_hint: str = "auto",
+    swmf_root: str | None = None,
+) -> dict[str, Any]:
+    return plan_resubmit(
+        run_dir=run_dir,
+        job_script=job_script,
+        sleep_seconds=sleep_seconds,
+        scheduler_hint=scheduler_hint,
+        swmf_root=swmf_root,
+    )
+
+
 def register(app: Any) -> None:
     app.tool(description="Run or preview SWMF PostProc.pl in the target run directory.")(swmf_postprocess)
     app.tool(description="Run or preview SWMF Restart.pl for restart file management.")(swmf_manage_restart)
-    app.tool(description="Plan Restart.pl commands for linking background solar wind results without execution.")(swmf_plan_restart_from_background)
+    app.tool(description="Plan guidance-first Restart.pl linking/validation workflow from background results without execution.")(swmf_plan_restart_from_background)
+    app.tool(description="Plan guidance-first PostProc.pl workflow options and command templates without execution.")(swmf_plan_postprocess)
+    app.tool(description="Plan guidance-first Resubmit.pl loop strategy and command templates without execution.")(swmf_plan_resubmit)
