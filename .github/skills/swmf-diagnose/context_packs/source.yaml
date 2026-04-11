@@ -1,0 +1,15 @@
+name: source
+protocol_version: swmf-debug/1.0
+required_fields:
+  - source_file_context
+  - touched_symbol_or_region
+  - invariant_block
+  - candidate_violation_ops
+  - required_runtime_checks
+optional_fields:
+  - old_new_diff
+  - artifact_comparison
+collection_tools:
+  - swmf_collect_source_context
+  - swmf_collect_invariant_context
+  - swmf_compare_run_artifacts

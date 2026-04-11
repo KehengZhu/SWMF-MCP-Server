@@ -5,6 +5,16 @@ from pathlib import Path
 from typing import Any
 
 from ..core.common import resolve_run_dir
+from ..core.debug_protocol import (
+    FAMILY_BUILD_CONFIG,
+    FAMILY_COUPLING_MPI_LAYOUT,
+    FAMILY_INPUT_SCHEMA,
+    FAMILY_POSTPROCESS_RESTART_OUTPUT,
+    FAMILY_RUNTIME_CRASH_STOP,
+    FAMILY_UNKNOWN,
+    STATE_CLASSIFICATION,
+    protocol_envelope,
+)
 from ..core.swmf_root import resolve_swmf_root
 
 
@@ -299,6 +309,20 @@ def _recommended_tools(detected_domain: str, has_param: bool, has_root: bool) ->
     return _dedupe_preserve_order(base)
 
 
+def _failure_family_for_domain(domain: str) -> str:
+    if domain == _DOMAIN_TESTPARAM:
+        return FAMILY_INPUT_SCHEMA
+    if domain == _DOMAIN_BUILD:
+        return FAMILY_BUILD_CONFIG
+    if domain == _DOMAIN_RUNTIME:
+        return FAMILY_RUNTIME_CRASH_STOP
+    if domain == _DOMAIN_RESTART:
+        return FAMILY_POSTPROCESS_RESTART_OUTPUT
+    if domain == _DOMAIN_MPI:
+        return FAMILY_COUPLING_MPI_LAYOUT
+    return FAMILY_UNKNOWN
+
+
 def diagnose_error(
     error_text: str,
     source_hint: str | None = None,
@@ -309,7 +333,7 @@ def diagnose_error(
 ) -> dict[str, Any]:
     text = (error_text or "").strip()
     if not text:
-        return {
+        payload = {
             "ok": False,
             "hard_error": True,
             "error_code": "ERROR_TEXT_MISSING",
@@ -322,6 +346,16 @@ def diagnose_error(
             "source_kind": "diagnostic_pipeline",
             "source_paths": [],
         }
+        payload.update(
+            protocol_envelope(
+                state=STATE_CLASSIFICATION,
+                failure_family=FAMILY_UNKNOWN,
+                observation_report=["No error text was provided for classification."],
+                next_discriminating_checks=["Provide the first failing line and surrounding log context."],
+                patch_ready=False,
+            )
+        )
+        return payload
 
     hint = _normalize_source_hint(source_hint)
     all_matches: dict[str, list[dict[str, Any]]] = {}
@@ -406,6 +440,29 @@ def diagnose_error(
         "source_paths": _dedupe_preserve_order(source_paths),
         "swmf_root_resolved": swmf_root_resolved,
     }
+
+    payload.update(
+        protocol_envelope(
+            state=STATE_CLASSIFICATION,
+            failure_family=_failure_family_for_domain(detected_domain),
+            observation_report=[
+                f"Classified diagnostic domain as '{detected_domain}'.",
+                f"Matched {len(root_causes)} root-cause signatures.",
+            ],
+            mechanism_candidates=[
+                {
+                    "code": item.get("code"),
+                    "confidence": item.get("confidence"),
+                    "message": item.get("message"),
+                }
+                for item in root_causes
+            ],
+            next_discriminating_checks=[
+                "Run one recommended next tool to collect authoritative evidence before patching.",
+            ],
+            patch_ready=False,
+        )
+    )
 
     return payload
 

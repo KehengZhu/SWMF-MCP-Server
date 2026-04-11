@@ -1,0 +1,21 @@
+name: input
+protocol_version: swmf-debug/1.0
+required_fields:
+  - param_path_or_text
+  - sessions
+  - component_map
+  - include_files
+  - unresolved_external_references
+  - parser_errors
+  - parser_warnings
+  - authoritative_followup
+optional_fields:
+  - required_components
+  - command_tokens_by_session
+  - path_search_guidance
+collection_tools:
+  - swmf_collect_param_context
+  - swmf_resolve_param_includes
+  - swmf_extract_component_map
+  - swmf_validate_external_inputs
+  - swmf_run_testparam

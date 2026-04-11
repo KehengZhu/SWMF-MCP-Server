@@ -1,0 +1,17 @@
+name: runtime
+protocol_version: swmf-debug/1.0
+required_fields:
+  - run_dir
+  - first_error
+  - stacktrace_or_rank_context
+  - artifact_presence
+  - scheduler_or_layout
+optional_fields:
+  - restart_markers
+  - postprocess_markers
+  - selected_log_file
+collection_tools:
+  - swmf_collect_run_context
+  - swmf_extract_first_error
+  - swmf_extract_stacktrace
+  - swmf_infer_job_layout

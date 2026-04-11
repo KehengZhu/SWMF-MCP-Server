@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback for environments without mcp in
             raise RuntimeError("mcp package is required to run the MCP server.")
 
 from .resources import coupling_info, examples, idl_reference, param_schema
-from .tools import build_run, configure, diagnose, idl, param, postprocess, retrieve, solar_campaign
+from .tools import build_run, configure, debug_protocol, diagnose, idl, param, postprocess, retrieve, solar_campaign
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +47,7 @@ postprocess.register(app)
 retrieve.register(app)
 idl.register(app)
 solar_campaign.register(app)
+debug_protocol.register(app)
 
 # Register MCP resources.
 param_schema.register(app)
@@ -89,6 +90,16 @@ swmf_plan_postprocess = postprocess.swmf_plan_postprocess
 swmf_plan_resubmit = postprocess.swmf_plan_resubmit
 swmf_parse_solar_event_list = solar_campaign.swmf_parse_solar_event_list
 swmf_plan_solar_campaign = solar_campaign.swmf_plan_solar_campaign
+swmf_collect_param_context = debug_protocol.swmf_collect_param_context
+swmf_resolve_param_includes = debug_protocol.swmf_resolve_param_includes
+swmf_extract_component_map = debug_protocol.swmf_extract_component_map
+swmf_collect_build_context = debug_protocol.swmf_collect_build_context
+swmf_collect_run_context = debug_protocol.swmf_collect_run_context
+swmf_extract_first_error = debug_protocol.swmf_extract_first_error
+swmf_extract_stacktrace = debug_protocol.swmf_extract_stacktrace
+swmf_collect_source_context = debug_protocol.swmf_collect_source_context
+swmf_collect_invariant_context = debug_protocol.swmf_collect_invariant_context
+swmf_compare_run_artifacts = debug_protocol.swmf_compare_run_artifacts
 
 
 def main() -> None:

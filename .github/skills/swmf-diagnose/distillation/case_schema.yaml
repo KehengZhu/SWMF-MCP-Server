@@ -1,0 +1,25 @@
+schema_version: 1
+required_fields:
+  - case_id
+  - timestamp
+  - failure_family
+  - phase
+  - decisive_artifacts
+  - missing_artifacts
+  - agent_wrong_turn
+  - user_correction
+  - final_mechanism_confidence
+  - patch_attempted
+  - patch_outcome
+  - invariant_violated
+optional_fields:
+  - notes
+  - follow_up_actions
+  - tool_gap_candidates
+update_mapping:
+  taxonomy: new_or_refined_failure_family
+  context_pack: missing_or_decisive_artifact_field
+  guardrail: repeated_agent_failure_mode
+  routing_rule: repeated_misclassification
+  playbook: repeated_workflow_gap
+  tool_backlog: repeated_evidence_gap_2_to_3_cases

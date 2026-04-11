@@ -1,0 +1,17 @@
+name: build
+protocol_version: swmf-debug/1.0
+required_fields:
+  - swmf_root_resolution
+  - marker_status
+  - catalog_summary
+  - compiler_or_mpi_context
+  - component_version_selection
+optional_fields:
+  - job_layout
+  - makefile_capabilities
+  - config_guidance
+collection_tools:
+  - swmf_collect_build_context
+  - swmf_prepare_build
+  - swmf_prepare_component_config
+  - swmf_infer_job_layout

@@ -12,6 +12,13 @@ from ..catalog import get_source_catalog
 from ..catalog.xml_catalog import normalize_command_name
 from ..core.authority import AUTHORITY_DERIVED, AUTHORITY_HEURISTIC, SOURCE_KIND_CURATED, SOURCE_KIND_LIGHTWEIGHT_PARSER
 from ..core.common import load_param_text, resolve_reference_path, resolve_run_dir
+from ..core.debug_protocol import (
+    FAMILY_BUILD_CONFIG,
+    FAMILY_INPUT_SCHEMA,
+    FAMILY_STARTUP_INITIALIZATION,
+    STATE_NORMALIZATION,
+    protocol_envelope,
+)
 from ..core.models import SourceCatalog, SourceRef
 from ..knowledge.curated import CURATED_KNOWLEDGE, normalize_curated_lookup_key
 from ..parsing.component_map import expand_component_map_rows
@@ -681,7 +688,7 @@ def diagnose_param(
         run_dir=run_dir_resolved,
     )
     if load_error is not None or loaded_text is None:
-        return {
+        payload = {
             "ok": False,
             "summary": "Could not load PARAM input for diagnosis.",
             "root_causes": [
@@ -712,6 +719,16 @@ def diagnose_param(
             "swmf_root_resolved": swmf_root_resolved,
             "run_dir_resolved": run_dir_resolved,
         }
+        payload.update(
+            protocol_envelope(
+                state=STATE_NORMALIZATION,
+                failure_family=FAMILY_INPUT_SCHEMA,
+                observation_report=["PARAM input failed to load during diagnosis."],
+                next_discriminating_checks=["Resolve param_path or pass param_text and rerun diagnosis."],
+                patch_ready=False,
+            )
+        )
+        return payload
 
     external_payload = validate_external_inputs(
         param_text=loaded_text,
@@ -896,7 +913,14 @@ def diagnose_param(
         source_paths.append(resolved_param_path)
     source_paths.extend(authoritative_result.get("source_paths", []))
 
-    return {
+    if launch_context_invalid:
+        failure_family = FAMILY_STARTUP_INITIALIZATION
+    elif has_missing_versions:
+        failure_family = FAMILY_BUILD_CONFIG
+    else:
+        failure_family = FAMILY_INPUT_SCHEMA
+
+    payload = {
         "ok": True,
         "summary": summary,
         "root_causes": root_causes,
@@ -926,6 +950,28 @@ def diagnose_param(
         "swmf_root_resolved": swmf_root_resolved,
         "run_dir_resolved": run_dir_resolved,
     }
+
+    payload.update(
+        protocol_envelope(
+            state=STATE_NORMALIZATION,
+            failure_family=failure_family,
+            observation_report=[
+                "Completed lightweight plus authoritative PARAM diagnosis.",
+                f"Identified {len(root_causes)} root-cause entries.",
+            ],
+            mechanism_candidates=[
+                {
+                    "code": item.get("code"),
+                    "authority": item.get("authority"),
+                    "message": item.get("message"),
+                }
+                for item in root_causes
+            ],
+            next_discriminating_checks=[next_step],
+            patch_ready=False,
+        )
+    )
+    return payload
 
 
 def template_directory_candidates(swmf_root_resolved: str) -> list[Path]:
@@ -1231,15 +1277,22 @@ def swmf_diagnose_param(
         return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
 
     if param_path is None and param_text is None:
-        return with_root(
-            {
-                "ok": False,
-                "hard_error": True,
-                "error_code": "PARAM_INPUT_MISSING",
-                "message": "Provide param_path or param_text.",
-            },
-            root,
+        payload = {
+            "ok": False,
+            "hard_error": True,
+            "error_code": "PARAM_INPUT_MISSING",
+            "message": "Provide param_path or param_text.",
+        }
+        payload.update(
+            protocol_envelope(
+                state=STATE_NORMALIZATION,
+                failure_family=FAMILY_INPUT_SCHEMA,
+                observation_report=["PARAM diagnosis input is missing."],
+                next_discriminating_checks=["Provide param_path or param_text and rerun diagnosis."],
+                patch_ready=False,
+            )
         )
+        return with_root(payload, root)
 
     payload = diagnose_param(
         swmf_root_resolved=root.swmf_root_resolved or str(Path.cwd()),

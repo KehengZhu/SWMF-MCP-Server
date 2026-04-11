@@ -1,0 +1,38 @@
+protocol_version: swmf-debug/1.0
+families:
+  - id: input_schema
+    description: PARAM syntax, include resolution, external input references, schema mismatches
+    default_context_pack: input
+    trigger_keywords: ["param", "include", "param.xml", "schema", "testparam"]
+  - id: build_config
+    description: Config.pl, compiler, makefile target, component-version compile selection
+    default_context_pack: build
+    trigger_keywords: ["build", "compile", "link", "config.pl", "module file"]
+  - id: startup_initialization
+    description: Failures before stable runtime loop starts
+    default_context_pack: runtime
+    trigger_keywords: ["startup", "initialization", "launch", "context invalid"]
+  - id: runtime_crash_stop
+    description: Runtime aborts, segfaults, fatal stop conditions, first failing timestep
+    default_context_pack: runtime
+    trigger_keywords: ["runtime", "crash", "segfault", "fatal", "abort"]
+  - id: hang_stall_performance
+    description: No progress, long stalls, throughput regressions
+    default_context_pack: runtime
+    trigger_keywords: ["hang", "stall", "slow", "performance", "deadlock"]
+  - id: coupling_mpi_layout
+    description: MPI rank layout, #COMPONENTMAP inconsistency, scheduler/layout mismatch
+    default_context_pack: runtime
+    trigger_keywords: ["mpi", "componentmap", "rank", "layout", "scheduler"]
+  - id: numerical_physics_anomaly
+    description: Non-physical outputs, discontinuities, unexpected scientific behavior
+    default_context_pack: numerical
+    trigger_keywords: ["nan", "cfl", "physics", "anomaly", "discontinuity"]
+  - id: postprocess_restart_output
+    description: Restart/postprocess script workflows and output integrity
+    default_context_pack: runtime
+    trigger_keywords: ["restart", "postproc", "output", "resubmit"]
+  - id: source_change_validation
+    description: Regressions introduced by source edits, invariant-sensitive logic changes
+    default_context_pack: source
+    trigger_keywords: ["source", "diff", "regression", "invariant", "subroutine"]

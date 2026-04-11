@@ -395,6 +395,19 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 
 - `swmf_diagnose_error`
 
+### Debug Protocol Evidence Domain
+
+- `swmf_collect_param_context`
+- `swmf_resolve_param_includes`
+- `swmf_extract_component_map`
+- `swmf_collect_build_context`
+- `swmf_collect_run_context`
+- `swmf_extract_first_error`
+- `swmf_extract_stacktrace`
+- `swmf_collect_source_context`
+- `swmf_collect_invariant_context`
+- `swmf_compare_run_artifacts`
+
 ## Implemented MCP resources
 
 - `swmf://param-schema/{component}`
