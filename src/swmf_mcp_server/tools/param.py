@@ -1248,22 +1248,6 @@ def swmf_generate_param_from_template(
     )
 
 
-def swmf_generate_param_block(
-    template_kind: str,
-    fits_path: str | None = None,
-    run_dir: str | None = None,
-    swmf_root: str | None = None,
-    nproc: int | None = None,
-) -> dict[str, Any]:
-    return swmf_generate_param_from_template(
-        template_kind=template_kind,
-        fits_path=fits_path,
-        run_dir=run_dir,
-        swmf_root=swmf_root,
-        nproc=nproc,
-    )
-
-
 def swmf_diagnose_param(
     param_path: str | None = None,
     param_text: str | None = None,
@@ -1311,5 +1295,4 @@ def register(app: Any) -> None:
     app.tool(description="Run Scripts/TestParam.pl for authoritative SWMF PARAM validation. CONSTRAINT: Must execute from SWMF_ROOT directory. Command format: cd SWMF_ROOT && ./Scripts/TestParam.pl -n=<nproc> <PARAM.in>.")(swmf_run_testparam)
     app.tool(description="Validate external file inputs referenced by PARAM content.")(swmf_validate_external_inputs)
     app.tool(description="Generate suggested PARAM content from a template kind and context.")(swmf_generate_param_from_template)
-    app.tool(description="Backward-compatible alias for generating PARAM content from templates.")(swmf_generate_param_block)
     app.tool(description="Diagnose PARAM issues in one call and return prioritized fixes.")(swmf_diagnose_param)

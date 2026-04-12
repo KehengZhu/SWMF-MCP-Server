@@ -81,21 +81,6 @@ flowchart TB
     linkStyle default stroke:#000000,stroke-width:2px;
 ```
 
-- `src/swmf_mcp_server/server.py`
-  - Registers all tool and resource domains and exposes convenience exports for integration tests and scripts.
-- `src/swmf_mcp_server/core/`
-  - Shared config, models, authority constants, error payloads, and SWMF root resolution.
-- `src/swmf_mcp_server/catalog/`
-  - Source indexing/runtime catalog access for commands, templates, scripts, and IDL procedures.
-- `src/swmf_mcp_server/parsing/`
-  - Lightweight PARAM parsing, component map parsing, XML parsing, IDL signature parsing, and external reference extraction.
-- `src/swmf_mcp_server/tools/`
-  - Domain-grouped MCP tool handlers (`configure`, `param`, `build_run`, `postprocess`, `retrieve`, `idl`), registered with `@mcp.tool(description="...")(swmf_...)`.
-- `src/swmf_mcp_server/resources/`
-  - MCP resource handlers for schema, examples, coupling info, and IDL reference views, registered with `@mcp.resource("swmf://...")`.
-- `src/swmf_mcp_server/knowledge/`
-  - Curated fallback knowledge used as non-authoritative enrichment when catalog fails.
-
 ## Intro (for those new to MCP)
 
 If you have never used MCP before, think of this project as a safe translator between a chat assistant and SWMF workflows.
@@ -109,39 +94,6 @@ What MCP means here:
 - MCP (Model Context Protocol) is just the bridge that lets an AI assistant call named tools with typed inputs
 - This repository implements those tools for SWMF tasks (validation, explanation, setup guidance, quickrun helpers)
 - Safety is intentional: narrow tool contracts instead of open-ended command execution
-
-In short: this server makes SWMF support feel conversational while keeping behavior explicit, inspectable, and safer for demos.
-
-This prototype is intentionally narrow and safe:
-- no arbitrary shell execution
-- no arbitrary file writes
-- no repo-wide re-indexing
-- focused on SWMF-specific read / validate / suggest workflows
-
-Here is a README-friendly version you can drop in as an “advantage” section.
-
-### Why MCP tools help when code indexing already exists
-
-Code indexing is already very useful for SWMF.
-
-A good assistant can read `PARAM.XML`, `Config.pl`, example `PARAM.in` files, and source code to explain commands, summarize coupling logic, or suggest likely configuration snippets. For read-only questions about the repository, that is often enough.
-
-MCP tools add value in a different place: **operating SWMF, not just reading it**.
-
-They let the assistant work with live SWMF state and controlled execution steps that do not exist in a static index. That includes validating a real `PARAM.in` with `Scripts/TestParam.pl`, checking the current configuration, preparing builds, inspecting run directories, post-processing outputs, and generating IDL workflows. In these cases, the assistant is no longer guessing from examples; it can return results based on the actual environment and current files.
-
-This also makes the workflow more reliable. Instead of only generating text that looks plausible, the assistant can follow a closed loop such as: prepare input, validate it, report errors, suggest fixes, and re-check. That is especially useful for SWMF tasks where correctness depends on the current setup, compiled components, or files produced during a run.
-
-Another benefit is safety. MCP tools expose narrow, explicit operations instead of unrestricted shell access. That keeps demo behavior more predictable, makes actions easier to inspect, and leaves room for guardrails around validation, file access, and run preparation.
-
-In practice, the split is simple:
-
-- **Code indexing** is best for understanding SWMF source code and configuration structure.
-- **MCP tools** are best for executing SWMF workflows and inspecting runtime state.
-
-The two approaches complement each other well: indexing helps the assistant understand SWMF, while MCP tools let it act on SWMF in a controlled way.
-
-Here is an even shorter version if you want something tighter:
 
 ### Why not rely on code indexing alone?
 
@@ -363,7 +315,6 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_run_testparam`
 - `swmf_validate_external_inputs`
 - `swmf_generate_param_from_template`
-- `swmf_generate_param_block`
 - `swmf_diagnose_param`
 
 ### Solar Campaign Domain
@@ -416,105 +367,163 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf://idl/procedures`
 - `swmf://idl/{procedure}`
 
-## Solar Campaign Workflows
 
-The MCP server supports planning and orchestrating multi-run solar campaign simulations via SWMFSOLAR integration.
 
-### Phase 1: Solar Campaign Parsing and Planning (Implemented)
+-----
 
-Two tools enable dry-run planning of SWMFSOLAR event-driven campaigns without execution:
+## Diagnostic Design: Skills + MCP for General SWMF Debugging
 
-- `swmf_parse_solar_event_list`: Parses SWMFSOLAR event-list files into normalized campaign specifications
-  - Extracts selected run IDs with optional override
-  - Normalizes parameter mutations (add/rm/replace/change semantics)
-  - Infers realization counts by map family (ADAPT→12, GONG→1, etc.)
-  - Returns structured campaign spec with model, map, and mutation metadata
+### Why an unguided agent struggles with SWMF debugging
 
-- `swmf_plan_solar_campaign`: Generates dry-run campaign plans with Makefile command preview
-  - Expands realizations and generates per-run simulation directories (naming: `run{id:03d}_{model}`)
-  - Groups commands into compile/prepare/submit phases
-  - Provides full command preview without execution
-  - Detects SWMFSOLAR root and resolves paths
-  - Returns `requires_manual_execution=true` for safety
+The problem is not that the agent cannot read code. The problem is that it often **jumps too fast** from a plot or log message to an explanation, and then to a code change.
 
-Example workflow:
+In the example Claude chat history:
 
-```text
-1. Load event-list file or inline text describing solar events (CME, flare onset times, maps)
-2. Call swmf_parse_solar_event_list to validate and normalize entries
-3. Call swmf_plan_solar_campaign to preview compile/prepare/run commands
-4. Review dry-run plan for correctness
-5. (Future Phase 2) Execute the campaign with swmf_execute_solar_campaign if approved
+- it misread parts of the plots,
+- changed its explanation after the user corrected it,
+- suggested code edits before the mechanism was fully clear,
+- and the modified code later crashed.
+
+Why this is hard in SWMF:
+
+- **The truth is spread out.** You need plots, raw data files, source code, logs, and runtime context together.
+- **The same symptom can mean different things.** A jump may be physics, indexing, coupling, restart effects, or a real bug.
+- **A small patch can break hidden assumptions.** What looks like a local fix can corrupt state somewhere else.
+
+So an unguided agent tends to:
+
+- over-interpret partial evidence,
+- mix observation with hypothesis,
+- and patch too early.
+
+That is why the skill and diagnostic tools should force a stricter order:
+
+1. observe,
+2. gather evidence,
+3. compare explanations,
+4. then edit code.
+
+This project can support more than one-off fixes or recurring bug lookups.
+The design goal is to make the AI assistant behave like a disciplined SWMF
+investigator:
+
+- MCP tools gather **authoritative evidence** from SWMF
+- skills enforce a **debugging protocol**
+- the model does the **reasoning only after context is assembled**
+
+### Design principles: the ultimate solution for AI debugging
+
+1. **Skills encode process, not diagnoses**
+   - Skills should say what to collect, in what order, and what not to skip.
+   - Skills should avoid embedding specific bug explanations unless they are used
+     as examples or tests.
+
+2. **MCP tools expose evidence primitives, not conclusions**
+
+3. **One universal protocol, many cases**
+
+4. **Patch only after invariant review**
+
+### Layered architecture
+
+```mermaid
+flowchart TD
+    USER["SWMF user"] --> AGENT["Reasoning model / AI agent"]
+    AGENT --> SKILL["Skill protocol<br>SKILL.md"]
+    SKILL --> MCP["MCP evidence tools"]
+    MCP --> BACKEND["SWMF backend<br>source, scripts, PARAM.XML, logs, run dirs"]
+
+    BACKEND --> MCP
+    MCP --> PACK["Structured context pack"]
+    PACK --> AGENT
+    AGENT --> OUT["Explanation, hypothesis, next experiment, or patch proposal"]
 ```
 
-## Source Of Truth Policy
+### Universal debugging state machine
 
-The server explicitly reports source provenance and authority for explain/retrieval outputs.
+```mermaid
+flowchart LR
+    A["Intake"] --> B["Classify<br>failure phase"]
+    B --> C["Collect minimum<br>evidence pack"]
+    C --> D["Normalize<br>observations"]
+    D --> E["List<br>candidate mechanisms"]
+    E --> F["Choose<br>cheapest discriminating check"]
+    F --> G["Patch<br>readiness review"]
+    G --> H["Patch or<br>run experiment"]
+    H --> I["Validate<br>with new evidence"]
 
-Source kinds used in responses include:
-- `curated`
-- `PARAM.XML`
-- `component PARAM.XML`
-- `example PARAM.in`
-- `TestParam.pl`
-- `manual/docs` (when applicable)
+    I -->|needs more evidence| C
+```
 
-Authority levels:
-- `heuristic`: convenience-only or curated fallback
-- `derived`: deterministic extraction from examples/templates
-- `authoritative`: direct metadata from `PARAM.XML` / component `PARAM.XML`, or TestParam execution
+### Failure families
 
-`swmf_explain_param` behavior:
-- first queries indexed authoritative XML sources
-- then enriches with curated summaries when available
-- returns source paths, source kinds, defaults/ranges/allowed values when extractable
+A universal skill should route problems into a small number of stable families:
 
-`swmf_validate_param` behavior:
-- remains safe/lightweight parser mode
-- distinguishes:
-	- syntax/structure errors
-	- inferred issues
-	- unresolved external references
-	- explicit `requires_authoritative_validation`
-- authoritative path remains `swmf_run_testparam`
+- input / `PARAM.in` / schema
+- build / compile / configuration
+- startup / initialization
+- runtime crash / stop
+- hang / stall / performance
+- coupling / MPI / layout
+- numerical / physics anomaly
+- restart / output / postprocess
+- source-code change validation
 
-Every major explain/retrieve/validation/testparam response includes:
-- `authority`
-- `source_kind`
-- `source_paths`
-- `swmf_root_resolved`
+### Context packs
 
-## What Remains Heuristic
+Each failure family should map to a reusable context pack rather than a specific
+old bug.
 
-These areas are intentionally heuristic and marked in tool outputs:
-- quickrun generation from magnetogram metadata
-- natural-language IDL visualization request parsing
-- template patching suggestions when constructing quick-run PARAM text
+```mermaid
+flowchart TB
+    ROOT["Failure family"] --> IN1["Input/schema pack"]
+    ROOT --> IN2["Build/config pack"]
+    ROOT --> IN3["Runtime/crash pack"]
+    ROOT --> IN4["Source-debug pack"]
+    ROOT --> IN5["Numerical/physics pack"]
 
-Authoritative validation and semantics still require:
-- `Scripts/TestParam.pl`
-- SWMF `PARAM.XML` definitions
-- component-specific docs and real run-time checks
+    IN1 --> P1["resolved PARAM.in\nincludes\nsessions\nCOMPONENTMAP\nTestParam"]
+    IN2 --> P2["selected models\nConfig.pl state\ncompiler/debug flags"]
+    IN3 --> P3["first error\nstack trace\nrank info\nrestart markers"]
+    IN4 --> P4["source location\ndiff\nwrapper/interface context\ninvariants"]
+    IN5 --> P5["plots\nraw file excerpts\nversion comparison\ncode path"]
+```
 
-Path-aware inputs for run-directory workflows:
-- `swmf_root` tool argument
-- `SWMF_ROOT` environment variable
-- `SWMF_IDL_EXEC` environment variable (for IDL batch executable resolution)
-- `run_dir` local heuristics
+### Observation before mechanism
 
-## What this prototype is for
+The skill should force a clean separation between:
 
-This server is meant to feel like an SWMF-aware assistant for a group demo.
+- **observations**: what plots, files, logs, and source code literally show
+- **candidate mechanisms**: possible explanations for those observations
+- **discriminating checks**: the next cheapest tests that separate those
+  candidates
 
-It focuses on the SWMF workflow around:
-- `Config.pl`
-- `PARAM.in`
-- `PARAM.XML`
-- `Scripts/TestParam.pl`
-- `make rundir`
-- `Restart.pl`
-- `PostProc.pl`
+This prevents the assistant from over-interpreting a plot, editing code before
+checking raw files, or confusing a plotting artifact with a source-code bug.
 
-It does **not** replace real SWMF validation. The authoritative SWMF-side checks still come from:
-- `PARAM.XML`
-- `Scripts/TestParam.pl`
+### How to make the system easy to improve
+
+The skill system should be modular and data-driven so it can absorb more SWMF
+community chat histories over time.
+
+```mermaid
+flowchart LR
+    CASES["Community chat histories<br>and debug submissions"] --> LABEL["Label case<br>phase, artifacts, wrong turns, fix status"]
+    LABEL --> GAP["Find recurring evidence gaps<br>and agent failure modes"]
+    GAP --> UPDATE1["Update taxonomy<br>and routing rules"]
+    GAP --> UPDATE2["Update context-pack schemas"]
+    GAP --> UPDATE3["Add guardrails<br>and invariant checks"]
+    GAP --> UPDATE4["Add MCP tools only when evidence needs repeat"]
+    UPDATE1 --> SKILLS["Improved skills"]
+    UPDATE2 --> SKILLS
+    UPDATE3 --> SKILLS
+    UPDATE4 --> MCPTOOLS["Improved MCP tools"]
+```
+
+A good rule is:
+
+- add a new **skill rule** when a repeated workflow mistake appears
+- add a new **context-pack field** when an important artifact is repeatedly
+  missing
+- add a new **MCP tool** only when the same evidence request appears across
+  multiple unrelated cases

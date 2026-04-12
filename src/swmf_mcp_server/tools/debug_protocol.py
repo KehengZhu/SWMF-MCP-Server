@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog import get_source_catalog
-from ..core.common import build_path_search_guidance, load_param_text, resolve_reference_path, resolve_run_dir
+from ..core.common import (
+    build_default_search_roots,
+    build_path_search_guidance,
+    load_param_text,
+    read_text_file,
+    resolve_path,
+    resolve_reference_path,
+    resolve_run_dir,
+)
 from ..core.debug_protocol import (
     FAMILY_BUILD_CONFIG,
     FAMILY_COUPLING_MPI_LAYOUT,
@@ -22,6 +30,7 @@ from ..core.debug_protocol import (
     STATE_VALIDATION,
     protocol_envelope,
 )
+from ..core.errors import not_found_error_payload
 from ..parsing.component_map import COMPONENTMAP_ROW, expand_component_map_rows
 from ..parsing.external_refs import extract_external_references_from_param_text
 from ..parsing.job_layout import find_likely_job_scripts
@@ -97,17 +106,6 @@ def _infer_required_components_from_sessions(sessions: list[Any]) -> list[str]:
             add_component(comp)
 
     return required
-
-
-def _resolve_file(path_text: str, run_dir: str | None = None) -> Path:
-    candidate = Path(path_text).expanduser()
-    if not candidate.is_absolute():
-        candidate = resolve_run_dir(run_dir) / candidate
-    return candidate.resolve()
-
-
-def _read_text_file(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="ignore")
 
 
 def _extract_first_error_payload(text: str, context_lines: int = 2) -> dict[str, Any]:
@@ -602,18 +600,16 @@ def swmf_collect_run_context(
     if not resolved_run_dir.is_dir():
         guidance = build_path_search_guidance(
             path_role="run_dir",
-            search_roots=[resolved_run_dir, resolved_run_dir.parent],
+            search_roots=build_default_search_roots(str(resolved_run_dir)),
             expected_entries=["PARAM.in", "runlog", "job.long"],
             keyword_hints=[resolved_run_dir.name, "run", "case", "output"],
         )
         return _merge_protocol(
-            {
-                "ok": False,
-                "hard_error": True,
-                "error_code": "RUN_DIR_NOT_FOUND",
-                "message": f"run_dir does not exist: {resolved_run_dir}",
+            not_found_error_payload(
+                error_code="RUN_DIR_NOT_FOUND",
+                message=f"run_dir does not exist: {resolved_run_dir}",
                 **guidance,
-            },
+            ),
             protocol_envelope(
                 state=STATE_EVIDENCE_COLLECTION,
                 failure_family=FAMILY_RUNTIME_CRASH_STOP,
@@ -638,7 +634,7 @@ def swmf_collect_run_context(
 
     log_candidate: Path | None = None
     if log_path is not None:
-        candidate = _resolve_file(log_path, run_dir=str(resolved_run_dir))
+        candidate = resolve_path(log_path, run_dir=str(resolved_run_dir))
         if candidate.is_file():
             log_candidate = candidate
     else:
@@ -658,7 +654,7 @@ def swmf_collect_run_context(
     source_paths: list[str] = []
     if log_candidate is not None:
         source_paths.append(str(log_candidate))
-        first_error_payload = _extract_first_error_payload(_read_text_file(log_candidate))
+        first_error_payload = _extract_first_error_payload(read_text_file(log_candidate))
 
     artifact_presence = {
         "PARAM.in": (resolved_run_dir / "PARAM.in").is_file(),
@@ -710,22 +706,20 @@ def swmf_extract_first_error(
     source_paths: list[str] = []
 
     if text is None and log_path is not None:
-        resolved_log_path = _resolve_file(log_path, run_dir=run_dir)
+        resolved_log_path = resolve_path(log_path, run_dir=run_dir)
         if not resolved_log_path.is_file():
             guidance = build_path_search_guidance(
                 path_role="log_path",
-                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                search_roots=build_default_search_roots(run_dir, [resolved_log_path.parent]),
                 expected_entries=[resolved_log_path.name, "runlog", "*.log", "*.out"],
                 keyword_hints=[resolved_log_path.stem, "run", "error", "log"],
             )
             return _merge_protocol(
-                {
-                    "ok": False,
-                    "hard_error": True,
-                    "error_code": "LOG_PATH_NOT_FOUND",
-                    "message": f"log_path does not exist: {resolved_log_path}",
+                not_found_error_payload(
+                    error_code="LOG_PATH_NOT_FOUND",
+                    message=f"log_path does not exist: {resolved_log_path}",
                     **guidance,
-                },
+                ),
                 protocol_envelope(
                     state=STATE_NORMALIZATION,
                     failure_family=FAMILY_RUNTIME_CRASH_STOP,
@@ -733,7 +727,7 @@ def swmf_extract_first_error(
                     patch_ready=False,
                 ),
             )
-        text = _read_text_file(resolved_log_path)
+        text = read_text_file(resolved_log_path)
         source_paths.append(str(resolved_log_path))
 
     if text is None:
@@ -782,22 +776,20 @@ def swmf_extract_stacktrace(
     source_paths: list[str] = []
 
     if text is None and log_path is not None:
-        resolved_log_path = _resolve_file(log_path, run_dir=run_dir)
+        resolved_log_path = resolve_path(log_path, run_dir=run_dir)
         if not resolved_log_path.is_file():
             guidance = build_path_search_guidance(
                 path_role="log_path",
-                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                search_roots=build_default_search_roots(run_dir, [resolved_log_path.parent]),
                 expected_entries=[resolved_log_path.name, "runlog", "*.log", "*.out"],
                 keyword_hints=[resolved_log_path.stem, "stack", "trace", "log"],
             )
             return _merge_protocol(
-                {
-                    "ok": False,
-                    "hard_error": True,
-                    "error_code": "LOG_PATH_NOT_FOUND",
-                    "message": f"log_path does not exist: {resolved_log_path}",
+                not_found_error_payload(
+                    error_code="LOG_PATH_NOT_FOUND",
+                    message=f"log_path does not exist: {resolved_log_path}",
                     **guidance,
-                },
+                ),
                 protocol_envelope(
                     state=STATE_NORMALIZATION,
                     failure_family=FAMILY_RUNTIME_CRASH_STOP,
@@ -805,7 +797,7 @@ def swmf_extract_stacktrace(
                     patch_ready=False,
                 ),
             )
-        text = _read_text_file(resolved_log_path)
+        text = read_text_file(resolved_log_path)
         source_paths.append(str(resolved_log_path))
 
     if text is None:
@@ -852,22 +844,20 @@ def swmf_collect_source_context(
     context_lines: int = 20,
     run_dir: str | None = None,
 ) -> dict[str, Any]:
-    resolved_source_path = _resolve_file(source_path, run_dir=run_dir)
+    resolved_source_path = resolve_path(source_path, run_dir=run_dir)
     if not resolved_source_path.is_file():
         guidance = build_path_search_guidance(
             path_role="source_path",
-            search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+            search_roots=build_default_search_roots(run_dir, [resolved_source_path.parent]),
             expected_entries=[resolved_source_path.name],
             keyword_hints=[resolved_source_path.stem, symbol_hint or "", "src", "mod"],
         )
         return _merge_protocol(
-            {
-                "ok": False,
-                "hard_error": True,
-                "error_code": "SOURCE_FILE_NOT_FOUND",
-                "message": f"source_path does not exist: {resolved_source_path}",
+            not_found_error_payload(
+                error_code="SOURCE_FILE_NOT_FOUND",
+                message=f"source_path does not exist: {resolved_source_path}",
                 **guidance,
-            },
+            ),
             protocol_envelope(
                 state=STATE_EVIDENCE_COLLECTION,
                 failure_family=FAMILY_SOURCE_CHANGE_VALIDATION,
@@ -877,7 +867,7 @@ def swmf_collect_source_context(
             ),
         )
 
-    text = _read_text_file(resolved_source_path)
+    text = read_text_file(resolved_source_path)
     lines = text.splitlines()
     center = 1
 
@@ -980,8 +970,8 @@ def swmf_compare_run_artifacts(
     run_dir: str | None = None,
     max_diff_lines: int = 120,
 ) -> dict[str, Any]:
-    reference = _resolve_file(reference_path, run_dir=run_dir)
-    candidate = _resolve_file(candidate_path, run_dir=run_dir)
+    reference = resolve_path(reference_path, run_dir=run_dir)
+    candidate = resolve_path(candidate_path, run_dir=run_dir)
 
     missing = []
     if not reference.exists():
@@ -992,19 +982,17 @@ def swmf_compare_run_artifacts(
     if missing:
         guidance = build_path_search_guidance(
             path_role="artifact path",
-            search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+            search_roots=build_default_search_roots(run_dir, [reference.parent, candidate.parent]),
             expected_entries=[Path(reference_path).name, Path(candidate_path).name],
             keyword_hints=[Path(reference_path).stem, Path(candidate_path).stem, "run", "output"],
         )
         return _merge_protocol(
-            {
-                "ok": False,
-                "hard_error": True,
-                "error_code": "ARTIFACT_PATH_NOT_FOUND",
-                "message": "One or more artifact paths do not exist.",
-                "missing_paths": missing,
+            not_found_error_payload(
+                error_code="ARTIFACT_PATH_NOT_FOUND",
+                message="One or more artifact paths do not exist.",
+                missing_paths=missing,
                 **guidance,
-            },
+            ),
             protocol_envelope(
                 state=STATE_VALIDATION,
                 failure_family=FAMILY_POSTPROCESS_RESTART_OUTPUT,
@@ -1061,8 +1049,8 @@ def swmf_compare_run_artifacts(
                 ),
             )
 
-        left_text = _read_text_file(reference)
-        right_text = _read_text_file(candidate)
+        left_text = read_text_file(reference)
+        right_text = read_text_file(candidate)
         diff_lines = list(
             difflib.unified_diff(
                 left_text.splitlines(),

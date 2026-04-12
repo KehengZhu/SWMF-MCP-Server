@@ -38,3 +38,20 @@ def resolution_failure_payload(message: str, notes: list[str]) -> dict[str, Any]
             "Set SWMF_ROOT to an absolute path to your SWMF source tree.",
         ],
     }
+
+
+def not_found_error_payload(
+    error_code: str,
+    message: str,
+    how_to_fix: list[str] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    return error_payload(
+        SwmfError(
+            error_code=error_code,
+            message=message,
+            hard_error=True,
+            how_to_fix=how_to_fix,
+        ),
+        **extra,
+    )

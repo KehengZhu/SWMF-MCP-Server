@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..core.common import build_path_search_guidance, load_param_text, resolve_run_dir
+from ..core.common import build_default_search_roots, build_path_search_guidance, load_param_text, resolve_run_dir
 from ..parsing.component_map import COMPONENTMAP_ROW
 from ..parsing.job_layout import find_likely_job_scripts, infer_job_layout_from_script
 from ..parsing.param_parser import parse_param_text
@@ -1023,7 +1023,7 @@ def swmf_prepare_component_config(
             param_name = Path(param_path).name or "PARAM.in"
             hint_payload = build_path_search_guidance(
                 path_role="param_path",
-                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                search_roots=build_default_search_roots(run_dir),
                 expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
                 keyword_hints=[param_name, "param", "restart", "setup"],
             )
@@ -1110,7 +1110,7 @@ def swmf_detect_setup_commands(
             param_name = Path(param_path).name or "PARAM.in"
             hint_payload = build_path_search_guidance(
                 path_role="param_path",
-                search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                search_roots=build_default_search_roots(run_dir),
                 expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
                 keyword_hints=[param_name, "param", "restart", "setup"],
             )
@@ -1155,7 +1155,7 @@ def swmf_apply_setup_commands(
                 param_name = Path(param_path).name or "PARAM.in"
                 hint_payload = build_path_search_guidance(
                     path_role="param_path",
-                    search_roots=[resolve_run_dir(run_dir), resolve_run_dir(run_dir).parent],
+                    search_roots=build_default_search_roots(run_dir),
                     expected_entries=[param_name, "PARAM.in", "PARAM.in.start", "PARAM.in.restart"],
                     keyword_hints=[param_name, "param", "restart", "setup"],
                 )

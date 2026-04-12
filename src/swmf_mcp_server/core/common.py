@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import re
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,37 @@ def resolve_run_dir(run_dir: str | None) -> Path:
     if run_dir:
         return Path(run_dir).expanduser().resolve()
     return Path.cwd().resolve()
+
+
+def resolve_path(path_text: str, run_dir: str | None = None) -> Path:
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = resolve_run_dir(run_dir) / path
+    return path.resolve()
+
+
+def read_text_file(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def build_default_search_roots(
+    run_dir: str | None,
+    extra_roots: Iterable[Path] | None = None,
+) -> list[Path]:
+    resolved_run_dir = resolve_run_dir(run_dir)
+    roots: list[Path] = [resolved_run_dir, resolved_run_dir.parent]
+    if extra_roots is not None:
+        roots.extend(extra_roots)
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
 
 
 def load_param_text(
