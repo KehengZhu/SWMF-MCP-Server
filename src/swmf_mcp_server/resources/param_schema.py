@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog import get_source_catalog
+from ..core import knowledge_service as ks
 from ..core.swmf_root import resolve_swmf_root
 
 
@@ -253,6 +254,26 @@ def get_param_schema_resource(component: str) -> dict[str, Any]:
         if isinstance(source_kind, str) and source_kind:
             source_kinds.add(source_kind)
 
+    # Source evidence from the knowledge index (heuristic, additive only)
+    source_evidence: list[dict[str, Any]] = []
+    source_evidence_note: str | None = None
+    if query_mode in ("keyword", "component") and commands:
+        # Use the first matched command's normalized name for evidence lookup
+        first_normalized = (ranked_matches[0][1].normalized if ranked_matches else None)
+        if first_normalized:
+            index_status = ks.get_index_status(catalog.swmf_root)
+            if not index_status.is_stale:
+                source_evidence = ks.get_param_evidence(
+                    catalog.swmf_root,
+                    command_normalized=first_normalized,
+                    max_results=6,
+                )
+            else:
+                source_evidence_note = (
+                    "Source evidence unavailable: knowledge index not built. "
+                    "Run swmf-index build --corpus SWMF --corpus SWMFSOLAR to enable this feature."
+                )
+
     return {
         "ok": True,
         "component": target,
@@ -266,6 +287,10 @@ def get_param_schema_resource(component: str) -> dict[str, Any]:
         "source_paths": source_paths,
         "source_kinds": sorted(source_kinds),
         "swmf_root_resolved": catalog.swmf_root,
+        # Knowledge-base evidence (additive; authority="heuristic")
+        "source_evidence": source_evidence,
+        "source_evidence_count": len(source_evidence),
+        "source_evidence_note": source_evidence_note,
     }
 
 

@@ -1,3 +1,3 @@
-from . import coupling_info, examples, idl_reference, param_schema
+from . import catalog_reference, coupling_info, examples, idl_reference, param_schema, source_knowledge
 
-__all__ = ["coupling_info", "examples", "idl_reference", "param_schema"]
+__all__ = ["catalog_reference", "coupling_info", "examples", "idl_reference", "param_schema", "source_knowledge"]

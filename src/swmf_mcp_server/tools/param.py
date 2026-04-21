@@ -12,6 +12,7 @@ from ..catalog import get_source_catalog
 from ..catalog.xml_catalog import normalize_command_name
 from ..core.authority import AUTHORITY_DERIVED, AUTHORITY_HEURISTIC, SOURCE_KIND_CURATED, SOURCE_KIND_LIGHTWEIGHT_PARSER
 from ..core.common import load_param_text, resolve_reference_path, resolve_run_dir
+from ..core import knowledge_service as ks
 from ..core.debug_protocol import (
     FAMILY_BUILD_CONFIG,
     FAMILY_INPUT_SCHEMA,
@@ -124,6 +125,23 @@ def explain_param(name: str, catalog: SourceCatalog | None) -> dict[str, Any]:
     source_paths = [item["path"] for item in source_payload if item["path"]]
     source_kinds = sorted({item["kind"] for item in source_payload})
 
+    # Source evidence from the knowledge index (heuristic, additive only)
+    source_evidence: list[dict[str, Any]] = []
+    source_evidence_note: str | None = None
+    if catalog is not None:
+        index_status = ks.get_index_status(catalog.swmf_root)
+        if not index_status.is_stale:
+            source_evidence = ks.get_param_evidence(
+                catalog.swmf_root,
+                command_normalized=normalized,
+                max_results=6,
+            )
+        else:
+            source_evidence_note = (
+                "Source evidence unavailable: knowledge index not built. "
+                "Run swmf-index build --corpus SWMF --corpus SWMFSOLAR to enable this feature."
+            )
+
     return {
         "found": True,
         "name": title,
@@ -140,6 +158,10 @@ def explain_param(name: str, catalog: SourceCatalog | None) -> dict[str, Any]:
         "source_kinds": source_kinds,
         "sources": source_payload,
         "authority": authority,
+        # Knowledge-base evidence (additive; authority="heuristic")
+        "source_evidence": source_evidence,
+        "source_evidence_count": len(source_evidence),
+        "source_evidence_note": source_evidence_note,
     }
 
 
@@ -1294,5 +1316,3 @@ def register(app: Any) -> None:
     app.tool(description="Validate PARAM structure with lightweight deterministic checks.")(swmf_validate_param)
     app.tool(description="Run Scripts/TestParam.pl for authoritative SWMF PARAM validation. CONSTRAINT: Must execute from SWMF_ROOT directory. Command format: cd SWMF_ROOT && ./Scripts/TestParam.pl -n=<nproc> <PARAM.in>.")(swmf_run_testparam)
     app.tool(description="Validate external file inputs referenced by PARAM content.")(swmf_validate_external_inputs)
-    app.tool(description="Generate suggested PARAM content from a template kind and context.")(swmf_generate_param_from_template)
-    app.tool(description="Diagnose PARAM issues in one call and return prioritized fixes.")(swmf_diagnose_param)

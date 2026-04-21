@@ -113,5 +113,3 @@ def swmf_set_grid(
 
 def register(app: Any) -> None:
     app.tool(description="Show resolved SWMF configuration paths and required marker files.")(swmf_show_config)
-    app.tool(description="Prepare Config.pl build configuration commands for selected SWMF components.")(swmf_select_components)
-    app.tool(description="Prepare a run layout and #COMPONENTMAP grid/process mapping for PARAM.in.")(swmf_set_grid)

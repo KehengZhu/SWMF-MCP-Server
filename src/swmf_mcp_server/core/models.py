@@ -5,6 +5,57 @@ from typing import Any
 
 from .authority import Authority
 
+# ---------------------------------------------------------------------------
+# Knowledge-base models
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SourceSymbol:
+    """A code symbol (module, subroutine, function, sub, pro) extracted from
+    SWMF source files and stored in the persistent knowledge index."""
+
+    kind: str           # "module" | "subroutine" | "function" | "sub" | "pro"
+    name: str
+    file_path: str
+    start_line: int     # 1-based
+    component: str | None
+    docstring: str | None
+    source_kind: str    # matches SOURCE_KIND_* constants
+    authority: Authority
+    uses: list[str] = field(default_factory=list)
+    param_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class KnowledgeRecord:
+    """A single retrievable knowledge item returned from the knowledge service."""
+
+    kind: str           # "symbol" | "param_mention" | "file_summary"
+    name: str
+    text: str           # human-readable summary / snippet
+    source_path: str
+    start_line: int | None
+    component: str | None
+    authority: Authority
+    source_kind: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class KnowledgeIndexStatus:
+    """Status of the persistent SQLite knowledge index for a given SWMF root."""
+
+    ok: bool
+    db_path: str
+    swmf_root: str | None
+    schema_version: str
+    symbol_count: int
+    file_count: int
+    last_built_epoch_s: float | None
+    is_stale: bool      # True when not yet built, or a watched file has changed
+    message: str | None
+
 
 @dataclass
 class SourceRef:

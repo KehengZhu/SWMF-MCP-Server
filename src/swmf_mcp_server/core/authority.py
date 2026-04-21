@@ -15,3 +15,10 @@ SOURCE_KIND_COMPONENT_PARAM_XML = "component PARAM.XML"
 SOURCE_KIND_EXAMPLE_PARAM = "example PARAM.in"
 SOURCE_KIND_SCRIPT = "script"
 SOURCE_KIND_LIGHTWEIGHT_PARSER = "lightweight_parser"
+
+# Knowledge-base source kinds (used by the persistent source index)
+SOURCE_KIND_FORTRAN_SOURCE = "fortran_source"
+SOURCE_KIND_PERL_SOURCE = "perl_source"
+SOURCE_KIND_IDL_SOURCE = "idl_source"
+SOURCE_KIND_MANUAL_DOC = "manual_doc"
+SOURCE_KIND_SOURCE_COMMENT = "source_comment"

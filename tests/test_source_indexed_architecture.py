@@ -6,6 +6,7 @@ import pytest
 
 from swmf_mcp_server import server
 from swmf_mcp_server.core.swmf_root import resolve_swmf_root
+from swmf_mcp_server.resources.catalog_reference import get_components_resource, get_param_trace_resource
 
 
 @pytest.fixture()
@@ -98,7 +99,7 @@ def test_explain_param_prefers_authoritative_xml(fake_swmf_root: Path) -> None:
 
 
 def test_list_components_and_versions_from_component_xml(fake_swmf_root: Path) -> None:
-    result = server.swmf_list_available_components(
+    result = get_components_resource(
         swmf_root=str(fake_swmf_root),
         force_refresh=True,
     )
@@ -110,7 +111,7 @@ def test_list_components_and_versions_from_component_xml(fake_swmf_root: Path) -
 
 
 def test_trace_param_command_includes_definition_and_examples(fake_swmf_root: Path) -> None:
-    result = server.swmf_trace_param_command(
+    result = get_param_trace_resource(
         name="#TIMEACCURATE",
         swmf_root=str(fake_swmf_root),
         force_refresh=True,
