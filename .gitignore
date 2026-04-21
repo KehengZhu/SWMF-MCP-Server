@@ -5,3 +5,5 @@ src/*egg-info
 .vscode
 .DS_Store
 .swmf_mcp_cache/
+.swmf_semantic_cache/
+.pytest_cache/

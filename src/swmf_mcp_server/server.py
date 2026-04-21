@@ -26,8 +26,7 @@ except Exception:  # pragma: no cover - fallback for environments without mcp in
         def run(self, *_args: Any, **_kwargs: Any) -> None:
             raise RuntimeError("mcp package is required to run the MCP server.")
 
-from .resources import catalog_reference, coupling_info, examples, idl_reference, param_schema, source_knowledge
-from .tools import configure, debug_protocol, knowledge, param
+from .tools import configure, debug_protocol, knowledge, lookup, param
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,13 +43,8 @@ param.register(app)
 debug_protocol.register(app)
 knowledge.register(app)
 
-# Register MCP resources.
-catalog_reference.register(app)
-param_schema.register(app)
-examples.register(app)
-coupling_info.register(app)
-idl_reference.register(app)
-source_knowledge.register(app)
+# Register catalog-backed and knowledge lookup tools.
+lookup.register(app)
 
 # Primary app alias used by callers/tests.
 mcp = app
@@ -72,6 +66,17 @@ swmf_collect_source_context = debug_protocol.swmf_collect_source_context
 swmf_collect_invariant_context = debug_protocol.swmf_collect_invariant_context
 swmf_compare_run_artifacts = debug_protocol.swmf_compare_run_artifacts
 swmf_search_source = knowledge.swmf_search_source
+swmf_lookup_source_symbol = knowledge.swmf_lookup_source_symbol
+swmf_get_knowledge_index_status = knowledge.swmf_get_knowledge_index_status
+swmf_list_components = lookup.swmf_list_components
+swmf_get_component = lookup.swmf_get_component
+swmf_get_param_command = lookup.swmf_get_param_command
+swmf_get_param_trace = lookup.swmf_get_param_trace
+swmf_get_param_schema = lookup.swmf_get_param_schema
+swmf_find_examples = lookup.swmf_find_examples
+swmf_get_coupling_info = lookup.swmf_get_coupling_info
+swmf_list_idl_procedures = lookup.swmf_list_idl_procedures
+swmf_explain_idl_procedure = lookup.swmf_explain_idl_procedure
 
 
 def main() -> None:

@@ -32,12 +32,12 @@ def get_symbol_resource(name: str) -> dict[str, Any]:
             "message": "Cannot resolve SWMF root. Set SWMF_ROOT or pass swmf_root.",
         }
 
-    status = ks.get_index_status(root)
-    if status.is_stale:
+    status = ks.ensure_index_ready(root)
+    if not status.ok or status.is_stale:
         return {
             "ok": False,
-            "error_code": "KNOWLEDGE_INDEX_NOT_BUILT",
-            "message": "Knowledge index is not built. Run swmf-index build --corpus SWMF --corpus SWMFSOLAR.",
+            "error_code": "KNOWLEDGE_INDEX_PREP_FAILED",
+            "message": "Knowledge index could not be prepared automatically.",
             "index_status": ks.status_as_payload(status),
         }
 

@@ -55,6 +55,7 @@ class KnowledgeIndexStatus:
     last_built_epoch_s: float | None
     is_stale: bool      # True when not yet built, or a watched file has changed
     message: str | None
+    corpus_roots: list[str] = field(default_factory=list)  # all indexed corpus roots
 
 
 @dataclass

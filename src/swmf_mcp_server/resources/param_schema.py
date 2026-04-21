@@ -261,8 +261,8 @@ def get_param_schema_resource(component: str) -> dict[str, Any]:
         # Use the first matched command's normalized name for evidence lookup
         first_normalized = (ranked_matches[0][1].normalized if ranked_matches else None)
         if first_normalized:
-            index_status = ks.get_index_status(catalog.swmf_root)
-            if not index_status.is_stale:
+            index_status = ks.ensure_index_ready(catalog.swmf_root)
+            if index_status.ok and not index_status.is_stale:
                 source_evidence = ks.get_param_evidence(
                     catalog.swmf_root,
                     command_normalized=first_normalized,
@@ -270,8 +270,8 @@ def get_param_schema_resource(component: str) -> dict[str, Any]:
                 )
             else:
                 source_evidence_note = (
-                    "Source evidence unavailable: knowledge index not built. "
-                    "Run swmf-index build --corpus SWMF --corpus SWMFSOLAR to enable this feature."
+                    "Source evidence unavailable: automatic knowledge indexing failed. "
+                    "Call swmf_refresh_knowledge_index to build it manually."
                 )
 
     return {

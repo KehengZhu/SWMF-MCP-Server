@@ -129,8 +129,8 @@ def explain_param(name: str, catalog: SourceCatalog | None) -> dict[str, Any]:
     source_evidence: list[dict[str, Any]] = []
     source_evidence_note: str | None = None
     if catalog is not None:
-        index_status = ks.get_index_status(catalog.swmf_root)
-        if not index_status.is_stale:
+        index_status = ks.ensure_index_ready(catalog.swmf_root)
+        if index_status.ok and not index_status.is_stale:
             source_evidence = ks.get_param_evidence(
                 catalog.swmf_root,
                 command_normalized=normalized,
@@ -138,8 +138,8 @@ def explain_param(name: str, catalog: SourceCatalog | None) -> dict[str, Any]:
             )
         else:
             source_evidence_note = (
-                "Source evidence unavailable: knowledge index not built. "
-                "Run swmf-index build --corpus SWMF --corpus SWMFSOLAR to enable this feature."
+                "Source evidence unavailable: automatic knowledge indexing failed. "
+                "Call swmf_refresh_knowledge_index to build it manually."
             )
 
     return {

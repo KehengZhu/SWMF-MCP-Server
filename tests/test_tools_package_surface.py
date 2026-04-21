@@ -8,6 +8,7 @@ def test_tools_package_exports_only_active_public_modules() -> None:
         "configure",
         "debug_protocol",
         "knowledge",
+        "lookup",
         "param",
     ]
 

@@ -69,8 +69,8 @@ Never infer mechanism from a plot when raw files or logs disagree.
 - `swmf_validate_param`
 - `swmf_run_testparam`
 - `swmf_search_source`
-- `swmf://knowledge/index-status`
-- `swmf://knowledge/symbol/{name}`
+- `swmf_get_knowledge_index_status`
+- `swmf_lookup_source_symbol`
 
 ## Patch Guardrails
 Never patch when any of the following is true:

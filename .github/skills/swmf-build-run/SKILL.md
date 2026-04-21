@@ -19,6 +19,7 @@ This skill should plan from evidence, verify prerequisites, and use bounded vali
 ## Boundaries
 - This skill may use authoritative validators such as `swmf_run_testparam`.
 - This skill should not recreate broad `make`, `Config.pl`, or run-wrapper MCP tools.
+- If the user asks for broad coupling architecture, coupler relationships, or a Mermaid diagram of component links, hand off to `swmf-postproc` rather than treating the request as build readiness.
 - If the user wants source changes, hand off to `swmf-implementation`.
 - If the request becomes failure-driven, hand off to `swmf-debug`.
 
@@ -39,15 +40,15 @@ This skill should plan from evidence, verify prerequisites, and use bounded vali
 - `swmf_validate_param`
 - `swmf_run_testparam`
 
-### Reference resources
-- `swmf://components`
-- `swmf://component/{component}`
-- `swmf://param-command/{name}`
-- `swmf://param-schema/{component}`
+### Reference tools
+- `swmf_list_components`
+- `swmf_get_component`
+- `swmf_get_param_command`
+- `swmf_get_param_schema`
 
 ### Heuristic evidence when explanation is broad
 - `swmf_search_source`
-- `swmf://knowledge/index-status`
+- `swmf_get_knowledge_index_status`
 
 ## Process
 1. Determine whether the request is about environment, component selection, layout, or validation.
@@ -69,6 +70,7 @@ Always include:
 - Ask `swmf-param-specialist` for PARAM semantics or schema conflicts.
 - Ask `swmf-debug` for failures, ambiguity, or regressions.
 - Ask `swmf-postproc` when the request is about outputs rather than setup.
+- Ask `swmf-postproc` when the request is about coupling architecture explanation rather than execution readiness.
 - Ask `swmf-implementation` when the request requires new source behavior.
 
 ## Anti-patterns

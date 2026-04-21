@@ -1,6 +1,6 @@
 ---
 name: swmf-implementation
-description: Use for source-change requests that add or alter SWMF scientific behavior. Phase-1 scope is scaffold only: define required evidence, invariants, collaboration rules, and patch-readiness gates before coding.
+description: "Use for source-change requests that add or alter SWMF scientific behavior. Phase-1 scope is scaffold only: define required evidence, invariants, collaboration rules, and patch-readiness gates before coding."
 ---
 
 # SWMF Implementation
@@ -34,9 +34,9 @@ Not yet in scope:
 - `swmf_collect_build_context`
 - `swmf_collect_run_context`
 - `swmf_search_source`
-- `swmf://knowledge/symbol/{name}`
-- `swmf://param-command/{name}`
-- `swmf://param-trace/{name}`
+- `swmf_lookup_source_symbol`
+- `swmf_get_param_command`
+- `swmf_get_param_trace`
 
 ## Implementation Preparation Flow
 1. Restate the requested behavior change and success condition.

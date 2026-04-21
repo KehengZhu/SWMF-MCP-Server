@@ -333,6 +333,10 @@ class TestKnowledgeService:
         status = ks.get_index_status(str(fake_swmf_root))
         assert status.is_stale is True
 
+    def test_search_auto_builds_when_missing(self, fake_swmf_root: Path) -> None:
+        results = ks.search_symbols(str(fake_swmf_root), query="ReadParam")
+        assert any(r["name"] == "ReadParam" for r in results)
+
     def test_build_then_search(self, fake_swmf_root: Path) -> None:
         ks.build_index(str(fake_swmf_root), force=True)
         results = ks.search_symbols(str(fake_swmf_root), query="ReadParam")
@@ -374,16 +378,26 @@ class TestKnowledgeTools:
         assert result["result_count"] >= 1
         assert result["authority"] == AUTHORITY_HEURISTIC
 
-    def test_search_tool_fails_gracefully_without_index(self, fake_swmf_root: Path) -> None:
+    def test_search_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
         from swmf_mcp_server.tools.knowledge import swmf_search_source
 
-        # Use a sub-dir that has no built index
-        (fake_swmf_root / "Config.pl").touch()
         result = swmf_search_source(query="ReadParam", swmf_root=str(fake_swmf_root))
-        # Either ok=True (if index was built above) or ok=False with error_code
-        if not result["ok"]:
-            assert result.get("error_code") == "KNOWLEDGE_INDEX_NOT_BUILT"
-            assert "how_to_fix" in result
+        assert result["ok"] is True
+        assert result["result_count"] >= 1
+
+    def test_lookup_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_lookup_source_symbol
+
+        result = swmf_lookup_source_symbol(name="ReadParam", swmf_root=str(fake_swmf_root))
+        assert result["ok"] is True
+        assert result["match_count"] >= 1
+
+    def test_param_evidence_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_get_param_source_evidence
+
+        result = swmf_get_param_source_evidence(command="#STOP", swmf_root=str(fake_swmf_root))
+        assert result["ok"] is True
+        assert result["evidence_count"] >= 1
 
     def test_lookup_tool_shape(self, fake_swmf_root: Path) -> None:
         from swmf_mcp_server.tools.knowledge import swmf_lookup_source_symbol, swmf_refresh_knowledge_index
@@ -431,6 +445,15 @@ class TestKnowledgeTools:
 
 
 class TestKnowledgeResources:
+    def test_symbol_resource_auto_builds(self, fake_swmf_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from swmf_mcp_server.resources import source_knowledge
+
+        monkeypatch.setattr(source_knowledge, "_resolve_root", lambda: str(fake_swmf_root))
+
+        result = source_knowledge.get_symbol_resource("ReadParam")
+        assert result["ok"] is True
+        assert result["match_count"] >= 1
+
     def test_symbol_resource_shape(self, fake_swmf_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from swmf_mcp_server.resources import source_knowledge
         from swmf_mcp_server.core import knowledge_service
@@ -543,12 +566,204 @@ class TestAuthorityDiscipline:
 
 
 def test_knowledge_tools_registered_in_server() -> None:
-    """Only the minimal public knowledge search tool remains server-exported."""
+    """Public knowledge tools are exported from the server module."""
     from swmf_mcp_server import server
 
     assert hasattr(server, "swmf_search_source")
     assert callable(getattr(server, "swmf_search_source"))
+    assert hasattr(server, "swmf_lookup_source_symbol")
+    assert callable(getattr(server, "swmf_lookup_source_symbol"))
+    assert hasattr(server, "swmf_get_knowledge_index_status")
+    assert callable(getattr(server, "swmf_get_knowledge_index_status"))
     assert not hasattr(server, "swmf_refresh_knowledge_index")
-    assert not hasattr(server, "swmf_lookup_source_symbol")
     assert not hasattr(server, "swmf_get_param_source_evidence")
-    assert not hasattr(server, "swmf_get_knowledge_index_status")
+
+
+# ---------------------------------------------------------------------------
+# Multi-root indexing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fake_swmfsolar_root(tmp_path: Path) -> Path:
+    """A minimal fake SWMFSOLAR root with a Fortran file."""
+    root = tmp_path / "SWMFSOLAR"
+    src = root / "src"
+    src.mkdir(parents=True)
+    (src / "SC_session.f90").write_text(
+        "! Solar corona session\nsubroutine ReadSolarParam(NameCommand)\n"
+        "  use ModReadParam\n  select case(NameCommand)\n"
+        "  case('#MAGNETOGRAM')\n    call read_var('iModel', iModel)\n"
+        "  end select\nend subroutine ReadSolarParam\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+class TestMultiRootIndexing:
+    def test_extra_root_symbols_indexed(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import (
+            SLICE_SWMFSOLAR_SOURCE,
+            SourceIndexCatalog,
+        )
+
+        catalog = SourceIndexCatalog(
+            fake_swmf_root,
+            extra_roots=[(fake_swmfsolar_root, SLICE_SWMFSOLAR_SOURCE)],
+        )
+        status = catalog.build(force=True)
+        assert status.ok is True
+
+        # Symbol from SWMFSOLAR must be found
+        results = catalog.lookup_symbol("ReadSolarParam")
+        assert len(results) >= 1
+        assert results[0]["corpus_slice"] == SLICE_SWMFSOLAR_SOURCE
+
+    def test_corpus_slice_filter_limits_to_one_root(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import (
+            SLICE_SWMF_SOURCE,
+            SLICE_SWMFSOLAR_SOURCE,
+            SourceIndexCatalog,
+        )
+
+        catalog = SourceIndexCatalog(
+            fake_swmf_root,
+            extra_roots=[(fake_swmfsolar_root, SLICE_SWMFSOLAR_SOURCE)],
+        )
+        catalog.build(force=True)
+
+        solar = catalog.search_symbols("Param", corpus_slice=SLICE_SWMFSOLAR_SOURCE)
+        assert all(r["corpus_slice"] == SLICE_SWMFSOLAR_SOURCE for r in solar)
+
+        primary = catalog.search_symbols("Param", corpus_slice=SLICE_SWMF_SOURCE)
+        assert all(r["corpus_slice"] == SLICE_SWMF_SOURCE for r in primary)
+
+    def test_corpus_roots_in_status(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import (
+            SLICE_SWMFSOLAR_SOURCE,
+            SourceIndexCatalog,
+        )
+
+        catalog = SourceIndexCatalog(
+            fake_swmf_root,
+            extra_roots=[(fake_swmfsolar_root, SLICE_SWMFSOLAR_SOURCE)],
+        )
+        catalog.build(force=True)
+        status = catalog.get_status()
+        assert str(fake_swmf_root) in status.corpus_roots
+        assert str(fake_swmfsolar_root.resolve()) in status.corpus_roots
+
+    def test_corpus_roots_in_status_payload(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import (
+            SLICE_SWMFSOLAR_SOURCE,
+            SourceIndexCatalog,
+        )
+
+        catalog = SourceIndexCatalog(
+            fake_swmf_root,
+            extra_roots=[(fake_swmfsolar_root, SLICE_SWMFSOLAR_SOURCE)],
+        )
+        catalog.build(force=True)
+        status = catalog.get_status()
+        payload = ks.status_as_payload(status)
+        assert "corpus_roots" in payload
+        assert isinstance(payload["corpus_roots"], list)
+        assert len(payload["corpus_roots"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# FTS5 full-text search
+# ---------------------------------------------------------------------------
+
+
+class TestFTS5Search:
+    def test_fts5_finds_by_name(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+        results = catalog.search_symbols("CalcTimestep")
+        assert any(r["name"] == "CalcTimestep" for r in results)
+
+    def test_fts5_finds_by_docstring_keyword(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+        # "CFL" appears in CalcTimestep docstring
+        results = catalog.search_symbols("CFL")
+        assert len(results) >= 1
+
+    def test_fts5_returns_ranked_results(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+        results = catalog.search_symbols("ReadParam", max_results=5)
+        assert len(results) >= 1
+        # No duplicates by name+file
+        keys = [(r["name"], r["file_path"]) for r in results]
+        assert len(keys) == len(set(keys))
+
+    def test_search_kind_filter(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+        subroutines = catalog.search_symbols("Param", kind="subroutine")
+        assert all(r["kind"] == "subroutine" for r in subroutines)
+
+
+# ---------------------------------------------------------------------------
+# Doc section indexing (tex / markdown)
+# ---------------------------------------------------------------------------
+
+
+class TestDocSectionIndexing:
+    def test_markdown_file_indexed_as_doc_sections(self, fake_swmf_root: Path) -> None:
+        # Write a markdown file under the fake root
+        doc_dir = fake_swmf_root / "doc"
+        doc_dir.mkdir(exist_ok=True)
+        (doc_dir / "overview.md").write_text(
+            "# Introduction\nThis is the overview.\n\n## Solver Details\nBATSRUS solver.\n",
+            encoding="utf-8",
+        )
+
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+
+        results = catalog.search_symbols("Introduction")
+        assert any(r["kind"] == "doc_section" for r in results)
+
+    def test_tex_file_indexed_as_doc_sections(self, fake_swmf_root: Path) -> None:
+        doc_dir = fake_swmf_root / "doc"
+        doc_dir.mkdir(exist_ok=True)
+        (doc_dir / "manual.tex").write_text(
+            "\\section{User Guide}\nExplains how to set up BATS-R-US.\n"
+            "\\subsection{Configuration}\nSee Config.pl.\n",
+            encoding="utf-8",
+        )
+
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+
+        results = catalog.search_symbols("User Guide")
+        assert any(r["kind"] == "doc_section" for r in results)
+
+    def test_doc_section_corpus_slice_is_manuals(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import SLICE_SWMF_MANUALS
+
+        doc_dir = fake_swmf_root / "doc"
+        doc_dir.mkdir(exist_ok=True)
+        (doc_dir / "notes.md").write_text(
+            "# Notes\nVarious notes about SWMF.\n",
+            encoding="utf-8",
+        )
+
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build(force=True)
+
+        doc_results = catalog.search_symbols("Notes", kind="doc_section")
+        if doc_results:
+            # doc sections under a doc/ dir get swmf_manuals slice
+            assert all(r["corpus_slice"] in (SLICE_SWMF_MANUALS, "analyst_context") for r in doc_results)

@@ -51,13 +51,27 @@ def test_server_registers_only_minimal_public_tools() -> None:
         "swmf_collect_invariant_context",
         "swmf_compare_run_artifacts",
         "swmf_search_source",
+        # Promoted from resources: catalog-backed lookups
+        "swmf_list_components",
+        "swmf_get_component",
+        "swmf_get_param_command",
+        "swmf_get_param_trace",
+        "swmf_get_param_schema",
+        "swmf_find_examples",
+        "swmf_get_coupling_info",
+        "swmf_list_idl_procedures",
+        "swmf_explain_idl_procedure",
+        # Promoted from resources: knowledge-index lookups
+        "swmf_lookup_source_symbol",
+        "swmf_get_knowledge_index_status",
     }
 
     assert tool_names == expected
     assert not any(name.startswith(("swmf_prepare_", "swmf_plan_", "swmf_generate_", "swmf_diagnose_")) for name in tool_names)
 
 
-def test_server_registers_mcp_resources_and_templates() -> None:
+def test_server_registers_no_mcp_resources() -> None:
+    """Resources have been fully replaced by named tools. Assert no URIs are registered."""
     app_runtime: Any = app
     resource_payload = asyncio.run(app_runtime.list_resources())
     template_payload = asyncio.run(app_runtime.list_resource_templates())
@@ -68,14 +82,5 @@ def test_server_registers_mcp_resources_and_templates() -> None:
         for item in _normalize_templates(template_payload)
     }
 
-    assert "swmf://coupling-pairs" in resource_uris
-    assert "swmf://components" in resource_uris
-    assert "swmf://idl/procedures" in resource_uris
-    assert "swmf://knowledge/index-status" in resource_uris
-
-    assert "swmf://component/{component}" in template_uris
-    assert "swmf://param-command/{name}" in template_uris
-    assert "swmf://param-trace/{name}" in template_uris
-    assert "swmf://param-schema/{component}" in template_uris
-    assert "swmf://examples/{name}" in template_uris
-    assert "swmf://idl/{procedure}" in template_uris
+    assert not resource_uris, f"Unexpected resources registered: {resource_uris}"
+    assert not template_uris, f"Unexpected resource templates registered: {template_uris}"

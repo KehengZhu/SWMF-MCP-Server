@@ -1,6 +1,6 @@
 ---
 name: swmf-param-specialist
-description: Use for any SWMF PARAM.in request: command meaning, schema interpretation, validation, include resolution, external inputs, component maps, and disagreements between PARAM.XML and source behavior.
+description: "Use for any SWMF PARAM.in request: command meaning, schema interpretation, validation, include resolution, external inputs, component maps, and disagreements between PARAM.XML and source behavior."
 ---
 
 # SWMF Param.in Specialist
@@ -45,18 +45,18 @@ State the family explicitly at the start of the answer.
 - `swmf_resolve_param_includes`
 - `swmf_extract_component_map`
 
-### Reference resources
-- `swmf://param-schema/{component}`
-- `swmf://param-command/{name}`
-- `swmf://param-trace/{name}`
-- `swmf://examples/{name}`
-- `swmf://component/{component}`
-- `swmf://components`
+### Reference tools
+- `swmf_get_param_schema`
+- `swmf_get_param_command`
+- `swmf_get_param_trace`
+- `swmf_find_examples`
+- `swmf_get_component`
+- `swmf_list_components`
 
 ### Heuristic source evidence
 - `swmf_search_source`
-- `swmf://knowledge/symbol/{name}`
-- `swmf://knowledge/index-status`
+- `swmf_lookup_source_symbol`
+- `swmf_get_knowledge_index_status`
 
 ## Authority Discipline
 Authority tiers for this skill:

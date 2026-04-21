@@ -20,7 +20,6 @@ authors = [
 
 [project.scripts]
 swmf-mcp-server = "swmf_mcp_server.server:main"
-swmf-index = "swmf_semantic_index.cli:main"
 
 [project.optional-dependencies]
 test = [

@@ -96,6 +96,8 @@ MCP tools help when the assistant needs runtime-grounded evidence: validate `PAR
 
 In short, indexing helps the assistant **understand** SWMF, while MCP tools let it **operate** SWMF safely and predictably.
 
+The knowledge index is prepared automatically on the first source-search, symbol-lookup, or PARAM-evidence request. Manual use of `swmf_refresh_knowledge_index` is still available when you want to force a rebuild.
+
 ## Install
 
 ### Requirements
@@ -267,6 +269,8 @@ If SWMF cannot be located, or the procedure does not exist in the index, the res
 - `swmf_compare_run_artifacts`
 - `swmf_search_source`
 
+`swmf_search_source`, `swmf_lookup_source_symbol`, `swmf_get_param_source_evidence`, and `swmf://knowledge/symbol/{name}` prepare the index automatically on first use.
+
 ## Implemented MCP resources
 
 - `swmf://components`
@@ -350,12 +354,14 @@ The public skill layer should be exactly five visible skills:
 
 Routing is no longer a separate visible skill. Classification, authority rules, and collaboration are embedded inside these five skills.
 
+`SKILL.md` remains the entry point for each visible skill. When a skill needs finer request discipline, `SKILL.md` may require companion playbooks in the same skill folder, such as routing, answer-contract, or domain-specific workflow files.
+
 ### Layered architecture
 
 ```mermaid
 flowchart TD
     USER["SWMF user"] --> AGENT["Reasoning model / AI agent"]
-    AGENT --> SKILL["Skill protocol<br>SKILL.md"]
+    AGENT --> SKILL["Skill protocol<br>SKILL.md + playbooks"]
     SKILL --> MCP["MCP evidence tools"]
     MCP --> BACKEND["SWMF backend<br>source, scripts, PARAM.XML, logs, run dirs"]
 

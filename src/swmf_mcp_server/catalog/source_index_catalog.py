@@ -2,43 +2,57 @@
 
 Architecture
 ------------
-One SQLite database per SWMF root, stored at::
+One SQLite database per primary SWMF root, stored at::
 
     {swmf_root}/.swmf_mcp_cache/knowledge.db
 
 Override with the ``SWMF_MCP_KNOWLEDGE_DB`` environment variable.
 
-The index is **not** built automatically on first use — callers must invoke
-:meth:`SourceIndexCatalog.build` or :meth:`SourceIndexCatalog.refresh`
-explicitly, typically via the ``swmf-index build --corpus SWMF --corpus SWMFSOLAR``
-CLI workflow used by the reconstructed skills-first architecture. Subsequent
-search/lookup calls are fast because they read from the persisted store.
+Multi-root indexing
+-------------------
+Pass additional corpus roots at construction time via ``extra_roots``::
+
+    catalog = SourceIndexCatalog(
+        "/path/to/SWMF",
+        extra_roots=[
+            ("/path/to/SWMFSOLAR",          "swmfsolar_source"),
+            ("/path/to/swmf-mcp-prototype", "analyst_context"),
+        ],
+    )
+
+All roots are indexed into the same SQLite database keyed on the primary
+SWMF root path.  The ``corpus_root`` and ``corpus_slice`` columns in
+``source_files`` identify which repo each file came from.
+
+Full-text search
+----------------
+An FTS5 virtual table (``symbols_fts``) mirrors the ``symbols`` table for
+fast BM25-ranked retrieval.  A LIKE fallback is used when FTS5 returns no
+hits.
 
 Indexed corpus
 --------------
-Priority 1 — always indexed:
-  * All ``PARAM.XML`` files
-  * ``Scripts/TestParam.pl``, ``Config.pl``, ``Scripts/Restart.pl``, ``Scripts/PostProc.pl``
-  * Control layer: ``src/CON_*.f90``, ``src/Mod*.f90``
+Source languages (symbols extracted via parsers):
+  * Fortran  (.f90, .f)  — subroutines, modules, functions
+  * Perl     (.pl, .pm)  — subroutines
+  * IDL      (.pro)      — procedures and functions
 
-Priority 2 — indexed when present:
-  * All ``*.f90``/``*.f`` files under component directories
-  * All ``*.pl`` files under ``Scripts/``
-  * All ``*.pro`` files under ``share/IDL/``
-  * All ``*.tex`` files under ``doc/Tex/``
+Documentation languages (section chunks stored as doc_section symbols):
+  * TeX      (.tex)      — \\\\section / \\\\subsection headings
+  * Markdown (.md, .rst) — # headings
 
 Authority
 ---------
-All symbols extracted by this catalog carry ``authority="heuristic"`` because
-they come from regex-based parsing, not from SWMF's own validator.  PARAM.XML
-and TestParam.pl results remain ``"authoritative"`` — this layer supplements,
-never overrides, those sources.
+All symbols carry ``authority="heuristic"`` — regex-based parsing.
+PARAM.XML and TestParam.pl remain authoritative; this index supplements,
+never overrides, them.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -52,32 +66,49 @@ from ..core.authority import (
     SOURCE_KIND_PERL_SOURCE,
 )
 from ..core.models import KnowledgeIndexStatus
-from ..parsing.fortran_parser import FortranSymbol, parse_fortran_file
+from ..parsing.fortran_parser import parse_fortran_file
 from ..parsing.idl_parser import parse_idl_file
-from ..parsing.perl_parser import PerlSymbol, parse_perl_file
+from ..parsing.perl_parser import parse_perl_file
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 CACHE_DIR_NAME = ".swmf_mcp_cache"
 DB_FILE_NAME = "knowledge.db"
 ENV_DB_OVERRIDE = "SWMF_MCP_KNOWLEDGE_DB"
 
+# Corpus slice labels (strings matching CorpusSlice enum values used by
+# the old swmf_semantic_index package — kept identical for compatibility)
+SLICE_SWMF_SOURCE = "swmf_source"
+SLICE_SWMFSOLAR_SOURCE = "swmfsolar_source"
+SLICE_SWMF_MANUALS = "swmf_manuals"
+SLICE_SWMF_SCRIPTS = "swmf_scripts"
+SLICE_SWMF_PARAM_XML = "swmf_param_xml"
+SLICE_ANALYST_CONTEXT = "analyst_context"
+
 # Per-language file limits to prevent runaway indexing on large trees
 _LIMITS: dict[str, int] = {
-    "fortran": 5000,
-    "perl": 300,
+    "fortran": 8000,
+    "perl": 500,
     "idl": 4000,
-    "tex": 150,
+    "tex": 300,
+    "doc": 600,
 }
 
-# Directories to skip while walking the source tree
-_SKIP_DIRS = {
-    ".git", ".svn", ".hg", ".swmf_mcp_cache",
-    "node_modules", "build", "tmp", "work",
-}
+# Max file size to index (bytes)
+_MAX_FILE_BYTES = 500_000
+
+# Max docstring / chunk text stored per symbol (chars)
+_MAX_CHUNK_CHARS = 3000
+
+# Directories to skip while walking
+_SKIP_DIRS = frozenset({
+    ".git", ".svn", ".hg", ".swmf_mcp_cache", ".swmf_semantic_cache",
+    "__pycache__", "node_modules", "build", "Build", "tmp", "work",
+    "dist", "obj", "CVS", ".venv", "venv",
+})
 
 # ---------------------------------------------------------------------------
 # Schema DDL
@@ -94,6 +125,8 @@ CREATE TABLE IF NOT EXISTS source_files (
     path           TEXT    UNIQUE NOT NULL,
     language       TEXT    NOT NULL,
     component      TEXT,
+    corpus_root    TEXT,
+    corpus_slice   TEXT,
     mtime          REAL,
     content_digest TEXT,
     indexed_at     REAL    NOT NULL
@@ -112,23 +145,65 @@ CREATE TABLE IF NOT EXISTS symbols (
     authority   TEXT    NOT NULL DEFAULT 'heuristic'
 );
 
+CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
+    name,
+    docstring,
+    component,
+    content='symbols',
+    content_rowid='id'
+);
+
 CREATE TABLE IF NOT EXISTS param_mentions (
     id                 INTEGER PRIMARY KEY,
     command_normalized TEXT    NOT NULL,
     file_id            INTEGER REFERENCES source_files(id) ON DELETE CASCADE,
-    symbol_id          INTEGER REFERENCES symbols(id) ON DELETE SET NULL,
+    symbol_id          INTEGER REFERENCES symbols(id)      ON DELETE SET NULL,
     line_number        INTEGER,
     context_snippet    TEXT,
     source_kind        TEXT    NOT NULL,
     authority          TEXT    NOT NULL DEFAULT 'heuristic'
 );
 
-CREATE INDEX IF NOT EXISTS idx_symbols_name      ON symbols(name);
-CREATE INDEX IF NOT EXISTS idx_symbols_component  ON symbols(component);
-CREATE INDEX IF NOT EXISTS idx_symbols_kind       ON symbols(kind);
-CREATE INDEX IF NOT EXISTS idx_symbols_file       ON symbols(file_id);
-CREATE INDEX IF NOT EXISTS idx_param_cmd          ON param_mentions(command_normalized);
-CREATE INDEX IF NOT EXISTS idx_param_file         ON param_mentions(file_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_name       ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_component   ON symbols(component);
+CREATE INDEX IF NOT EXISTS idx_symbols_kind        ON symbols(kind);
+CREATE INDEX IF NOT EXISTS idx_symbols_file        ON symbols(file_id);
+CREATE INDEX IF NOT EXISTS idx_param_cmd           ON param_mentions(command_normalized);
+CREATE INDEX IF NOT EXISTS idx_param_file          ON param_mentions(file_id);
+CREATE INDEX IF NOT EXISTS idx_files_corpus_root   ON source_files(corpus_root);
+CREATE INDEX IF NOT EXISTS idx_files_corpus_slice  ON source_files(corpus_slice);
+"""
+
+# FTS5 sync triggers — installed after bulk build to avoid per-row overhead
+_FTS_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+    INSERT INTO symbols_fts(rowid, name, docstring, component)
+    VALUES (new.id, new.name, COALESCE(new.docstring,''), COALESCE(new.component,''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+    INSERT INTO symbols_fts(symbols_fts, rowid, name, docstring, component)
+    VALUES ('delete', old.id, old.name, COALESCE(old.docstring,''), COALESCE(old.component,''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+    INSERT INTO symbols_fts(symbols_fts, rowid, name, docstring, component)
+    VALUES ('delete', old.id, old.name, COALESCE(old.docstring,''), COALESCE(old.component,''));
+    INSERT INTO symbols_fts(rowid, name, docstring, component)
+    VALUES (new.id, new.name, COALESCE(new.docstring,''), COALESCE(new.component,''));
+END;
+"""
+
+# Schema teardown for full rebuild
+_DROP_TABLES = """
+DROP TRIGGER IF EXISTS symbols_au;
+DROP TRIGGER IF EXISTS symbols_ad;
+DROP TRIGGER IF EXISTS symbols_ai;
+DROP TABLE IF EXISTS param_mentions;
+DROP TABLE IF EXISTS symbols_fts;
+DROP TABLE IF EXISTS symbols;
+DROP TABLE IF EXISTS source_files;
+DROP TABLE IF EXISTS manifest;
 """
 
 
@@ -145,7 +220,7 @@ def _language_for(path: Path) -> str | None:
     ext = path.suffix.lower()
     if ext in (".f90", ".f"):
         return "fortran"
-    if ext == ".pl":
+    if ext in (".pl", ".pm"):
         return "perl"
     if ext == ".pro":
         return "idl"
@@ -168,7 +243,7 @@ def _source_kind_for(language: str) -> str:
 
 def _should_skip(path: Path) -> bool:
     for part in path.parts:
-        if part in _SKIP_DIRS or (part.startswith(".") and part != "."):
+        if part in _SKIP_DIRS or (part.startswith(".") and part not in {".", ".."}):
             return True
     return False
 
@@ -180,32 +255,64 @@ def _db_path_for(swmf_root: str | Path) -> Path:
     return Path(swmf_root) / CACHE_DIR_NAME / DB_FILE_NAME
 
 
+def _classify_corpus_slice(lang: str, rel_path: str, default_slice: str) -> str:
+    """Determine corpus slice from language, relative path, and root default."""
+    if default_slice == SLICE_ANALYST_CONTEXT:
+        return SLICE_ANALYST_CONTEXT
+    parts = rel_path.lower().replace("\\", "/").split("/")
+    if lang == "tex":
+        return SLICE_SWMF_MANUALS
+    if lang == "doc":
+        if any(p in ("doc", "docs", "tex", "manual", "manuals") for p in parts):
+            return SLICE_SWMF_MANUALS
+        return SLICE_ANALYST_CONTEXT
+    if lang == "perl":
+        return SLICE_SWMF_SCRIPTS
+    # fortran / idl — inherit root default slice
+    return default_slice
+
+
 # ---------------------------------------------------------------------------
 # File discovery
 # ---------------------------------------------------------------------------
 
 
-def _discover_files(swmf_root: Path) -> list[tuple[Path, str]]:
-    """Return (path, language) pairs for all indexable files under *swmf_root*."""
-    results: list[tuple[Path, str]] = []
+def _discover_all_files(
+    primary_root: Path,
+    extra_roots: list[tuple[Path, str]],
+) -> list[tuple[Path, str, str, str]]:
+    """Walk all corpus roots; return (path, lang, corpus_root_str, corpus_slice)."""
+    roots: list[tuple[Path, str]] = [(primary_root, SLICE_SWMF_SOURCE)]
+    roots.extend(extra_roots)
+
+    results: list[tuple[Path, str, str, str]] = []
     counts: dict[str, int] = {lang: 0 for lang in _LIMITS}
 
-    for path in sorted(swmf_root.rglob("*")):
-        if not path.is_file():
-            continue
-        if _should_skip(path):
-            continue
+    for root_path, default_slice in roots:
+        root_str = str(root_path)
+        for path in sorted(root_path.rglob("*")):
+            if not path.is_file():
+                continue
+            if _should_skip(path):
+                continue
+            try:
+                if path.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
 
-        lang = _language_for(path)
-        if lang is None:
-            continue
+            lang = _language_for(path)
+            if lang is None:
+                continue
 
-        bucket = lang if lang in _LIMITS else "tex"
-        if counts.get(bucket, 0) >= _LIMITS.get(bucket, 9999):
-            continue
+            bucket = lang if lang in _LIMITS else "doc"
+            if counts.get(bucket, 0) >= _LIMITS.get(bucket, 9999):
+                continue
+            counts[bucket] = counts.get(bucket, 0) + 1
 
-        counts[bucket] = counts.get(bucket, 0) + 1
-        results.append((path, lang))
+            rel = str(path.relative_to(root_path))
+            corpus_slice = _classify_corpus_slice(lang, rel, default_slice)
+            results.append((path, lang, root_str, corpus_slice))
 
     return results
 
@@ -225,7 +332,52 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 # ---------------------------------------------------------------------------
-# Symbol indexing
+# Document chunkers (tex / markdown)
+# ---------------------------------------------------------------------------
+
+_TEX_SECTION_RE = re.compile(r"\\(?:sub)*section\*?\{([^}]+)\}")
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
+_COMPONENT_RE = re.compile(
+    r"(?:^|[/\\])(GM|IE|IM|IH|SC|OH|RB|UA|PS|SP|CON|BATS|RCM|RIM|PWOM|CIE|CIMI|GITM)"
+    r"(?:[/\\$])",
+    re.IGNORECASE,
+)
+
+
+def _component_from_path(rel_path: str) -> str | None:
+    m = _COMPONENT_RE.search(rel_path)
+    return m.group(1).upper() if m else None
+
+
+def _split_sections(text: str, pattern: re.Pattern) -> list[tuple[str, int, str]]:
+    """Split *text* into (heading, 1-based start_line, body) tuples."""
+    results: list[tuple[str, int, str]] = []
+    last_end = 0
+    current_heading = "__preamble__"
+    current_start_line = 1
+
+    for m in pattern.finditer(text):
+        heading = m.group(1).strip()
+        start_char = m.start()
+        start_line = text[:start_char].count("\n") + 1
+
+        body = text[last_end:start_char]
+        if body.strip():
+            results.append((current_heading, current_start_line, body[:_MAX_CHUNK_CHARS]))
+
+        current_heading = heading
+        current_start_line = start_line
+        last_end = start_char
+
+    remaining = text[last_end:]
+    if remaining.strip():
+        results.append((current_heading, current_start_line, remaining[:_MAX_CHUNK_CHARS]))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Symbol indexing helpers
 # ---------------------------------------------------------------------------
 
 
@@ -236,22 +388,16 @@ def _index_fortran(
     text: str,
     source_kind: str,
 ) -> list[tuple[int, list[str]]]:
-    """Insert Fortran symbols; return [(symbol_id, param_refs), ...]."""
     inserted: list[tuple[int, list[str]]] = []
     for sym in parse_fortran_file(path, text=text):
         cur = conn.execute(
-            "INSERT INTO symbols (file_id, name, kind, start_line, component, docstring, uses, source_kind, authority) "
+            "INSERT INTO symbols "
+            "(file_id, name, kind, start_line, component, docstring, uses, source_kind, authority) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                file_id,
-                sym.name,
-                sym.kind,
-                sym.start_line,
-                sym.component,
-                sym.docstring,
-                json.dumps(sym.uses) if sym.uses else None,
-                source_kind,
-                AUTHORITY_HEURISTIC,
+                file_id, sym.name, sym.kind, sym.start_line, sym.component,
+                sym.docstring, json.dumps(sym.uses) if sym.uses else None,
+                source_kind, AUTHORITY_HEURISTIC,
             ),
         )
         inserted.append((cur.lastrowid, sym.param_refs))
@@ -265,21 +411,15 @@ def _index_perl(
     text: str,
     source_kind: str,
 ) -> list[tuple[int, list[str]]]:
-    """Insert Perl symbols; return [(symbol_id, param_refs), ...]."""
     inserted: list[tuple[int, list[str]]] = []
     for sym in parse_perl_file(path, text=text):
         cur = conn.execute(
-            "INSERT INTO symbols (file_id, name, kind, start_line, component, docstring, source_kind, authority) "
+            "INSERT INTO symbols "
+            "(file_id, name, kind, start_line, component, docstring, source_kind, authority) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                file_id,
-                sym.name,
-                sym.kind,
-                sym.start_line,
-                None,
-                sym.docstring,
-                source_kind,
-                AUTHORITY_HEURISTIC,
+                file_id, sym.name, sym.kind, sym.start_line, None,
+                sym.docstring, source_kind, AUTHORITY_HEURISTIC,
             ),
         )
         inserted.append((cur.lastrowid, sym.param_refs))
@@ -293,25 +433,46 @@ def _index_idl(
     text: str,
     source_kind: str,
 ) -> list[tuple[int, list[str]]]:
-    """Insert IDL symbols; return [(symbol_id, [])]."""
     inserted: list[tuple[int, list[str]]] = []
     for sig in parse_idl_file(path):
         cur = conn.execute(
-            "INSERT INTO symbols (file_id, name, kind, start_line, component, docstring, source_kind, authority) "
+            "INSERT INTO symbols "
+            "(file_id, name, kind, start_line, component, docstring, source_kind, authority) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                file_id,
-                sig.name,
-                sig.kind,
-                sig.line_number,
-                None,
-                sig.docstring,
-                source_kind,
-                AUTHORITY_HEURISTIC,
+                file_id, sig.name, sig.kind, sig.line_number, None,
+                sig.docstring, source_kind, AUTHORITY_HEURISTIC,
             ),
         )
         inserted.append((cur.lastrowid, []))
     return inserted
+
+
+def _index_doc(
+    conn: sqlite3.Connection,
+    file_id: int,
+    path: Path,
+    text: str,
+    source_kind: str,
+    lang: str,
+    rel_path: str,
+) -> None:
+    """Index tex / markdown / rst files as doc_section symbols."""
+    pattern = _TEX_SECTION_RE if lang == "tex" else _MD_HEADING_RE
+    component = _component_from_path(rel_path)
+    sections = _split_sections(text, pattern)
+    if not sections:
+        sections = [(path.stem, 1, text[:_MAX_CHUNK_CHARS])]
+    for heading, start_line, body in sections:
+        conn.execute(
+            "INSERT INTO symbols "
+            "(file_id, name, kind, start_line, component, docstring, source_kind, authority) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                file_id, heading, "doc_section", start_line, component,
+                body, source_kind, AUTHORITY_HEURISTIC,
+            ),
+        )
 
 
 def _store_param_mentions(
@@ -320,7 +481,6 @@ def _store_param_mentions(
     symbol_entries: list[tuple[int, list[str]]],
     source_kind: str,
 ) -> None:
-    """Store param_mentions rows linking PARAM commands to symbol + file."""
     for symbol_id, param_refs in symbol_entries:
         for cmd in param_refs:
             conn.execute(
@@ -331,7 +491,13 @@ def _store_param_mentions(
             )
 
 
-def _index_file(conn: sqlite3.Connection, path: Path, lang: str) -> None:
+def _index_file(
+    conn: sqlite3.Connection,
+    path: Path,
+    lang: str,
+    corpus_root: str = "",
+    corpus_slice: str = "",
+) -> None:
     """Read, parse, and store one source file into the database."""
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -343,23 +509,57 @@ def _index_file(conn: sqlite3.Connection, path: Path, lang: str) -> None:
     source_kind = _source_kind_for(lang)
     now = time.time()
 
+    rel_path = ""
+    if corpus_root:
+        try:
+            rel_path = str(path.relative_to(corpus_root))
+        except ValueError:
+            rel_path = path.name
+
     cur = conn.execute(
-        "INSERT OR REPLACE INTO source_files (path, language, mtime, content_digest, indexed_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (str(path.resolve()), lang, mtime, digest, now),
+        "INSERT OR REPLACE INTO source_files "
+        "(path, language, corpus_root, corpus_slice, mtime, content_digest, indexed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(path.resolve()), lang, corpus_root, corpus_slice, mtime, digest, now),
     )
     file_id = cur.lastrowid
 
     if lang == "fortran":
         entries = _index_fortran(conn, file_id, path, text, source_kind)
+        _store_param_mentions(conn, file_id, entries, source_kind)
     elif lang == "perl":
         entries = _index_perl(conn, file_id, path, text, source_kind)
+        _store_param_mentions(conn, file_id, entries, source_kind)
     elif lang == "idl":
-        entries = _index_idl(conn, file_id, path, text, source_kind)
-    else:
-        entries = []
+        _index_idl(conn, file_id, path, text, source_kind)
+    elif lang in ("tex", "doc"):
+        _index_doc(conn, file_id, path, text, source_kind, lang, rel_path)
 
-    _store_param_mentions(conn, file_id, entries, source_kind)
+
+# ---------------------------------------------------------------------------
+# FTS5 query helper
+# ---------------------------------------------------------------------------
+
+
+def _safe_fts_query(query: str) -> str:
+    """Convert free text to a safe FTS5 MATCH expression (AND semantics)."""
+    cleaned = re.sub(r'["\(\)\:\*\^\+\-]', " ", query.strip())
+    tokens = [t for t in cleaned.split() if len(t) > 1]
+    if not tokens:
+        return '""'
+    return " ".join(tokens)
+
+
+# ---------------------------------------------------------------------------
+# Row -> dict helper
+# ---------------------------------------------------------------------------
+
+
+def _symbol_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    uses_raw = d.get("uses")
+    d["uses"] = json.loads(uses_raw) if uses_raw else []
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -368,17 +568,29 @@ def _index_file(conn: sqlite3.Connection, path: Path, lang: str) -> None:
 
 
 class SourceIndexCatalog:
-    """Persistent knowledge index for a SWMF source tree.
+    """Persistent knowledge index over one or more corpus roots.
 
-    One instance per SWMF root; call :meth:`build` once to populate,
-    then use :meth:`search_symbols`, :meth:`lookup_symbol`, and
-    :meth:`get_param_evidence` for retrieval.  :meth:`refresh` performs
-    an incremental update using mtime/digest comparisons.
+    Parameters
+    ----------
+    swmf_root:
+        Primary SWMF root.  The SQLite database lives at
+        ``{swmf_root}/.swmf_mcp_cache/knowledge.db``.
+    extra_roots:
+        Optional list of ``(path, corpus_slice)`` pairs for additional
+        repos, e.g. SWMFSOLAR or the MCP prototype repo.
     """
 
-    def __init__(self, swmf_root: str | Path) -> None:
+    def __init__(
+        self,
+        swmf_root: str | Path,
+        *,
+        extra_roots: list[tuple[str | Path, str]] | None = None,
+    ) -> None:
         self._swmf_root = Path(swmf_root).resolve()
         self._db_path = _db_path_for(self._swmf_root)
+        self._extra_roots: list[tuple[Path, str]] = [
+            (Path(p).resolve(), s) for p, s in (extra_roots or [])
+        ]
 
     # ------------------------------------------------------------------
     # Status
@@ -396,15 +608,22 @@ class SourceIndexCatalog:
                 file_count=0,
                 last_built_epoch_s=None,
                 is_stale=True,
-                message="Index not yet built. Run swmf-index build --corpus SWMF --corpus SWMFSOLAR to build it.",
+                message="Index not yet built. Call swmf_refresh_knowledge_index to build it.",
+                corpus_roots=[],
             )
 
         try:
             conn = _connect(self._db_path)
             with conn:
-                manifest = dict(conn.execute("SELECT key, value FROM manifest").fetchall())
-                symbol_count = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-                file_count = conn.execute("SELECT COUNT(*) FROM source_files").fetchone()[0]
+                manifest = dict(
+                    conn.execute("SELECT key, value FROM manifest").fetchall()
+                )
+                symbol_count = conn.execute(
+                    "SELECT COUNT(*) FROM symbols"
+                ).fetchone()[0]
+                file_count = conn.execute(
+                    "SELECT COUNT(*) FROM source_files"
+                ).fetchone()[0]
             conn.close()
         except sqlite3.Error as exc:
             return KnowledgeIndexStatus(
@@ -417,11 +636,16 @@ class SourceIndexCatalog:
                 last_built_epoch_s=None,
                 is_stale=True,
                 message=f"Database error: {exc}",
+                corpus_roots=[],
             )
 
         built_at = float(manifest.get("built_at", "0")) or None
         schema = manifest.get("schema_version", "?")
         is_stale = schema != SCHEMA_VERSION
+        try:
+            corpus_roots: list[str] = json.loads(manifest.get("corpus_roots", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            corpus_roots = [str(self._swmf_root)]
 
         return KnowledgeIndexStatus(
             ok=True,
@@ -433,6 +657,7 @@ class SourceIndexCatalog:
             last_built_epoch_s=built_at,
             is_stale=is_stale,
             message=None,
+            corpus_roots=corpus_roots,
         )
 
     # ------------------------------------------------------------------
@@ -440,10 +665,9 @@ class SourceIndexCatalog:
     # ------------------------------------------------------------------
 
     def build(self, force: bool = False) -> KnowledgeIndexStatus:
-        """Build the index from scratch (full scan).
+        """Full scan across all corpus roots (drop + rebuild).
 
-        If the database already exists and *force* is False, the build is
-        skipped and the existing index status is returned.
+        Skipped when the DB is current and *force* is False.
         """
         if self._db_path.exists() and not force:
             status = self.get_status()
@@ -452,68 +676,94 @@ class SourceIndexCatalog:
 
         conn = _connect(self._db_path)
         try:
-            with conn:
-                conn.executescript(_DDL)
-                # Wipe existing data on a full rebuild
-                conn.execute("DELETE FROM param_mentions")
-                conn.execute("DELETE FROM symbols")
-                conn.execute("DELETE FROM source_files")
+            # Wipe and recreate schema (executescript auto-commits pending tx)
+            conn.executescript(_DROP_TABLES)
+            conn.executescript(_DDL)
+            # No FTS triggers yet — bulk insert without per-row overhead
 
-                files = _discover_files(self._swmf_root)
-                for path, lang in files:
-                    _index_file(conn, path, lang)
+            with conn:
+                files = _discover_all_files(self._swmf_root, self._extra_roots)
+                for path, lang, corpus_root, corpus_slice in files:
+                    _index_file(conn, path, lang, corpus_root, corpus_slice)
+
+                # Populate FTS index from the content table in one shot
+                conn.execute("INSERT INTO symbols_fts(symbols_fts) VALUES ('rebuild')")
 
                 now = time.time()
+                corpus_root_strs = [str(self._swmf_root)] + [
+                    str(r) for r, _ in self._extra_roots
+                ]
                 for key, value in [
                     ("schema_version", SCHEMA_VERSION),
                     ("swmf_root", str(self._swmf_root)),
                     ("built_at", str(now)),
+                    ("corpus_roots", json.dumps(corpus_root_strs)),
                 ]:
                     conn.execute(
                         "INSERT OR REPLACE INTO manifest (key, value) VALUES (?, ?)",
                         (key, value),
                     )
+
+            # Install FTS sync triggers for future incremental refreshes
+            conn.executescript(_FTS_TRIGGERS)
         finally:
             conn.close()
 
         return self.get_status()
 
     def refresh(self) -> KnowledgeIndexStatus:
-        """Incrementally update the index.
+        """Incremental update across all corpus roots.
 
         - New files are indexed.
-        - Changed files (mtime or digest differs) are re-indexed.
-        - Deleted files are removed from the index.
+        - Changed files (mtime differs) are re-indexed.
+        - Deleted files are removed.
 
-        If the index does not exist, delegates to :meth:`build`.
+        Delegates to :meth:`build` when the DB is absent or schema is stale.
         """
         if not self._db_path.exists():
             return self.build()
 
+        # Schema version check — force rebuild on mismatch
+        try:
+            conn = _connect(self._db_path)
+            row = conn.execute(
+                "SELECT value FROM manifest WHERE key = 'schema_version'"
+            ).fetchone()
+            db_schema = row[0] if row else "0"
+            conn.close()
+        except sqlite3.Error:
+            db_schema = "0"
+
+        if db_schema != SCHEMA_VERSION:
+            return self.build(force=True)
+
         conn = _connect(self._db_path)
         try:
+            # Ensure FTS triggers exist (no-op if already installed)
+            conn.executescript(_FTS_TRIGGERS)
+
             with conn:
-                conn.executescript(_DDL)
-
-                # Current state in db
-                db_files: dict[str, dict[str, Any]] = {}
-                for row in conn.execute("SELECT id, path, mtime, content_digest FROM source_files"):
-                    db_files[row["path"]] = dict(row)
-
-                # Current state on disk
-                disk_files = {
-                    str(p.resolve()): lang
-                    for p, lang in _discover_files(self._swmf_root)
+                db_files: dict[str, dict[str, Any]] = {
+                    row["path"]: dict(row)
+                    for row in conn.execute(
+                        "SELECT id, path, mtime, content_digest FROM source_files"
+                    )
+                }
+                disk_files: dict[str, tuple[str, str, str]] = {
+                    str(p.resolve()): (lang, corpus_root, corpus_slice)
+                    for p, lang, corpus_root, corpus_slice
+                    in _discover_all_files(self._swmf_root, self._extra_roots)
                 }
 
-                # Remove deleted
+                # Remove deleted files (CASCADE removes symbols -> FTS triggers sync)
                 for db_path in list(db_files):
                     if db_path not in disk_files:
-                        conn.execute("DELETE FROM source_files WHERE path = ?", (db_path,))
-                        db_files.pop(db_path)
+                        conn.execute(
+                            "DELETE FROM source_files WHERE path = ?", (db_path,)
+                        )
 
                 # Add new or re-index changed
-                for abs_path, lang in disk_files.items():
+                for abs_path, (lang, corpus_root, corpus_slice) in disk_files.items():
                     path = Path(abs_path)
                     try:
                         mtime = path.stat().st_mtime
@@ -524,31 +774,35 @@ class SourceIndexCatalog:
                     if row is not None:
                         if abs(row["mtime"] - mtime) < 0.01:
                             continue  # unchanged
-                        # Changed: remove old symbols then re-index
-                        conn.execute("DELETE FROM source_files WHERE path = ?", (abs_path,))
+                        conn.execute(
+                            "DELETE FROM source_files WHERE path = ?", (abs_path,)
+                        )
 
-                    _index_file(conn, path, lang)
+                    _index_file(conn, path, lang, corpus_root, corpus_slice)
 
                 now = time.time()
-                conn.execute(
-                    "INSERT OR REPLACE INTO manifest (key, value) VALUES ('built_at', ?)",
-                    (str(now),),
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO manifest (key, value) VALUES ('schema_version', ?)",
-                    (SCHEMA_VERSION,),
-                )
+                corpus_root_strs = [str(self._swmf_root)] + [
+                    str(r) for r, _ in self._extra_roots
+                ]
+                for key, value in [
+                    ("built_at", str(now)),
+                    ("schema_version", SCHEMA_VERSION),
+                    ("corpus_roots", json.dumps(corpus_root_strs)),
+                ]:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO manifest (key, value) VALUES (?, ?)",
+                        (key, value),
+                    )
         finally:
             conn.close()
 
         return self.get_status()
 
     # ------------------------------------------------------------------
-    # Retrieval
+    # Internal helpers
     # ------------------------------------------------------------------
 
     def _require_db(self) -> sqlite3.Connection | None:
-        """Open the database, or return None if it has not been built yet."""
         if not self._db_path.exists():
             return None
         try:
@@ -556,47 +810,127 @@ class SourceIndexCatalog:
         except sqlite3.Error:
             return None
 
+    # ------------------------------------------------------------------
+    # Retrieval
+    # ------------------------------------------------------------------
+
     def search_symbols(
         self,
         query: str,
         component: str | None = None,
         kind: str | None = None,
+        corpus_slice: str | None = None,
         max_results: int = 20,
     ) -> list[dict[str, Any]]:
-        """Keyword search across symbol names and docstrings.
+        """Search across symbol names, docstrings, and doc sections.
 
-        Matching is case-insensitive LIKE on name + docstring.
+        Uses FTS5 BM25 ranking when available; falls back to case-insensitive
+        LIKE matching.
+
+        Parameters
+        ----------
+        corpus_slice:
+            Optional filter by corpus slice, e.g. ``"swmfsolar_source"``
+            or ``"swmf_manuals"``.
         """
         conn = self._require_db()
         if conn is None:
             return []
 
+        results: list[dict[str, Any]] = []
+        try:
+            results = self._search_fts5(
+                conn, query,
+                component=component, kind=kind,
+                corpus_slice=corpus_slice, max_results=max_results,
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        if not results:
+            try:
+                results = self._search_like(
+                    conn, query,
+                    component=component, kind=kind,
+                    corpus_slice=corpus_slice, max_results=max_results,
+                )
+            except sqlite3.Error:
+                pass
+
+        conn.close()
+        return results
+
+    def _search_fts5(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        *,
+        component: str | None,
+        kind: str | None,
+        corpus_slice: str | None,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        fts_q = _safe_fts_query(query)
+        params: list[Any] = [fts_q]
+        extra_where = ""
+        if component:
+            extra_where += " AND UPPER(s.component) = UPPER(?)"
+            params.append(component)
+        if kind:
+            extra_where += " AND s.kind = ?"
+            params.append(kind)
+        if corpus_slice:
+            extra_where += " AND f.corpus_slice = ?"
+            params.append(corpus_slice)
+        params.append(max_results)
+
+        sql = (
+            "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
+            "       s.source_kind, s.authority, s.uses, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
+            "FROM symbols_fts fts "
+            "JOIN symbols s ON fts.rowid = s.id "
+            "JOIN source_files f ON s.file_id = f.id "
+            f"WHERE symbols_fts MATCH ?{extra_where} "
+            "ORDER BY rank LIMIT ?"
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [_symbol_row_to_dict(row) for row in rows]
+
+    def _search_like(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        *,
+        component: str | None,
+        kind: str | None,
+        corpus_slice: str | None,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
         like = f"%{query.lower()}%"
         params: list[Any] = [like, like]
-        where = "WHERE (LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.docstring,'')) LIKE ?)"
+        where = (
+            "WHERE (LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.docstring,'')) LIKE ?)"
+        )
         if component:
             where += " AND UPPER(s.component) = UPPER(?)"
             params.append(component)
         if kind:
             where += " AND s.kind = ?"
             params.append(kind)
+        if corpus_slice:
+            where += " AND f.corpus_slice = ?"
+            params.append(corpus_slice)
         params.append(max_results)
 
         sql = (
             "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-            "       s.source_kind, s.authority, f.path AS file_path "
+            "       s.source_kind, s.authority, s.uses, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
             "FROM symbols s JOIN source_files f ON s.file_id = f.id "
-            f"{where} "
-            "ORDER BY s.name LIMIT ?"
+            f"{where} ORDER BY s.name LIMIT ?"
         )
-
-        try:
-            rows = conn.execute(sql, params).fetchall()
-        except sqlite3.Error:
-            rows = []
-        finally:
-            conn.close()
-
+        rows = conn.execute(sql, params).fetchall()
         return [_symbol_row_to_dict(row) for row in rows]
 
     def lookup_symbol(self, name: str, kind: str | None = None) -> list[dict[str, Any]]:
@@ -613,11 +947,11 @@ class SourceIndexCatalog:
 
         sql = (
             "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-            "       s.source_kind, s.authority, f.path AS file_path "
+            "       s.source_kind, s.authority, s.uses, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
             "FROM symbols s JOIN source_files f ON s.file_id = f.id "
             f"{where} ORDER BY s.name"
         )
-
         try:
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.Error:
@@ -634,9 +968,7 @@ class SourceIndexCatalog:
     ) -> list[dict[str, Any]]:
         """Return source symbols and files that reference a PARAM command.
 
-        Combines:
-        1. Explicit mentions in ``param_mentions`` (extracted during indexing)
-        2. Symbols whose name or docstring contains the command string
+        Combines explicit ``param_mentions`` with text-search fallback.
         """
         conn = self._require_db()
         if conn is None:
@@ -647,30 +979,29 @@ class SourceIndexCatalog:
         cmd_lower = command_normalized.lower()
 
         try:
-            # 1. Explicit param_mentions (highest signal)
             mention_sql = (
                 "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-                "       s.source_kind, s.authority, f.path AS file_path "
+                "       s.source_kind, s.authority, s.uses, "
+                "       f.path AS file_path, f.corpus_root, f.corpus_slice "
                 "FROM param_mentions pm "
                 "JOIN source_files f ON pm.file_id = f.id "
                 "LEFT JOIN symbols s ON pm.symbol_id = s.id "
                 "WHERE UPPER(pm.command_normalized) = ? "
-                "ORDER BY f.language, s.name "
-                "LIMIT ?"
+                "ORDER BY f.language, s.name LIMIT ?"
             )
             for row in conn.execute(mention_sql, (cmd_upper, max_results)).fetchall():
                 record = _symbol_row_to_dict(row)
                 record["evidence_kind"] = "explicit_param_mention"
                 results.append(record)
 
-            # 2. Text-search fallback when explicit mentions are scarce
             if len(results) < max_results:
                 remaining = max_results - len(results)
                 seen_paths = {r["file_path"] for r in results}
                 like = f"%{cmd_lower}%"
                 text_sql = (
                     "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-                    "       s.source_kind, s.authority, f.path AS file_path "
+                    "       s.source_kind, s.authority, s.uses, "
+                    "       f.path AS file_path, f.corpus_root, f.corpus_slice "
                     "FROM symbols s JOIN source_files f ON s.file_id = f.id "
                     "WHERE LOWER(COALESCE(s.name,'')) LIKE ? "
                     "   OR LOWER(COALESCE(s.docstring,'')) LIKE ? "
@@ -696,7 +1027,8 @@ class SourceIndexCatalog:
 
         sql = (
             "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-            "       s.source_kind, s.authority, f.path AS file_path "
+            "       s.source_kind, s.authority, s.uses, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
             "FROM symbols s JOIN source_files f ON s.file_id = f.id "
             "WHERE f.path = ? ORDER BY s.start_line"
         )
@@ -708,15 +1040,3 @@ class SourceIndexCatalog:
             conn.close()
 
         return [_symbol_row_to_dict(row) for row in rows]
-
-
-# ---------------------------------------------------------------------------
-# Row → dict helper
-# ---------------------------------------------------------------------------
-
-
-def _symbol_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    d = dict(row)
-    uses_raw = d.get("uses")
-    d["uses"] = json.loads(uses_raw) if uses_raw else []
-    return d
