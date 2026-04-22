@@ -1,9 +1,10 @@
-from . import configure, debug_protocol, knowledge, lookup, param
+from . import catalog, configure, debug_protocol, knowledge, param, reference
 
 __all__ = [
+	"catalog",
 	"configure",
 	"debug_protocol",
 	"knowledge",
-	"lookup",
 	"param",
+	"reference",
 ]

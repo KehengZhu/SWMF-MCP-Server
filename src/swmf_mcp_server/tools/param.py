@@ -8,11 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..catalog import get_source_catalog
-from ..catalog.xml_catalog import normalize_command_name
 from ..core.authority import AUTHORITY_DERIVED, AUTHORITY_HEURISTIC, SOURCE_KIND_CURATED, SOURCE_KIND_LIGHTWEIGHT_PARSER
 from ..core.common import load_param_text, resolve_reference_path, resolve_run_dir
-from ..core import knowledge_service as ks
 from ..core.debug_protocol import (
     FAMILY_BUILD_CONFIG,
     FAMILY_INPUT_SCHEMA,
@@ -21,10 +18,13 @@ from ..core.debug_protocol import (
     protocol_envelope,
 )
 from ..core.models import SourceCatalog, SourceRef
+from ..knowledge import service as ks
 from ..knowledge.curated import CURATED_KNOWLEDGE, normalize_curated_lookup_key
 from ..parsing.component_map import expand_component_map_rows
 from ..parsing.external_refs import extract_external_references_from_param_text
 from ..parsing.param_parser import parse_param_text
+from ..reference.service import get_reference_catalog
+from ..reference.xml import normalize_command_name
 from ._helpers import resolve_root_or_failure, with_root
 
 
@@ -135,6 +135,7 @@ def explain_param(name: str, catalog: SourceCatalog | None) -> dict[str, Any]:
                 catalog.swmf_root,
                 command_normalized=normalized,
                 max_results=6,
+                ensure_ready=False,
             )
         else:
             source_evidence_note = (
@@ -1178,7 +1179,7 @@ def swmf_explain_param(
         fallback["resolution_failure"] = failure
         return fallback
 
-    catalog_error, catalog = get_source_catalog(root=root, force_refresh=force_refresh)
+    catalog_error, catalog = get_reference_catalog(root=root, force_refresh=force_refresh)
     if catalog_error is not None or catalog is None:
         fallback = explain_param(name=name, catalog=None)
         fallback["swmf_root_resolved"] = None

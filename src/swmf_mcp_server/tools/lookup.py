@@ -1,4 +1,4 @@
-"""Named MCP tools for catalog-backed reference lookups.
+"""Named MCP tools for reference-domain lookups.
 
 Replaces resource URIs (swmf://...) with named tools that MCP clients
 can discover and invoke reliably through standard tool routing.
@@ -20,16 +20,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..resources.coupling_info import get_coupling_pairs_resource
-from ..resources.examples import get_examples_resource
-from ..resources.param_schema import get_param_schema_resource
-from .idl import swmf_explain_idl_procedure, swmf_list_idl_procedures
-from .retrieve import (
+from ..reference.service import (
+    swmf_explain_idl_procedure,
     swmf_find_param_command,
     swmf_get_component_versions,
     swmf_list_available_components,
+    swmf_list_idl_procedures,
     swmf_trace_param_command,
 )
+from ..resources.coupling_info import get_coupling_pairs_resource
+from ..resources.examples import get_examples_resource
+from ..resources.param_schema import get_param_schema_resource
 
 
 def swmf_list_components(

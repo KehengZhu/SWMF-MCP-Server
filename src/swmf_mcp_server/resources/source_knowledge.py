@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core import knowledge_service as ks
 from ..core.authority import AUTHORITY_HEURISTIC
 from ..core.swmf_root import resolve_swmf_root
+from ..knowledge import service as ks
 
 
 def _resolve_root() -> str | None:
@@ -41,7 +41,7 @@ def get_symbol_resource(name: str) -> dict[str, Any]:
             "index_status": ks.status_as_payload(status),
         }
 
-    matches = ks.lookup_symbol(root, name=name)
+    matches = ks.lookup_symbol(root, name=name, ensure_ready=False)
     return {
         "ok": True,
         "name": name,

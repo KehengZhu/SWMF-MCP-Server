@@ -50,8 +50,11 @@ def test_server_registers_only_minimal_public_tools() -> None:
         "swmf_collect_source_context",
         "swmf_collect_invariant_context",
         "swmf_compare_run_artifacts",
-        "swmf_search_source",
-        # Promoted from resources: catalog-backed lookups
+        "swmf_build_catalog_index",
+        "swmf_refresh_catalog_index",
+        "swmf_get_catalog_status",
+        "swmf_search_catalog",
+        "swmf_lookup_catalog_symbol",
         "swmf_list_components",
         "swmf_get_component",
         "swmf_get_param_command",
@@ -61,9 +64,11 @@ def test_server_registers_only_minimal_public_tools() -> None:
         "swmf_get_coupling_info",
         "swmf_list_idl_procedures",
         "swmf_explain_idl_procedure",
-        # Promoted from resources: knowledge-index lookups
-        "swmf_lookup_source_symbol",
-        "swmf_get_knowledge_index_status",
+        "swmf_build_knowledge_index",
+        "swmf_get_knowledge_status",
+        "swmf_search_knowledge",
+        "swmf_understand_source_query",
+        "swmf_get_agent_context_pack",
     }
 
     assert tool_names == expected

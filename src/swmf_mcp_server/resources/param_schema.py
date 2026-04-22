@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..catalog import get_source_catalog
-from ..core import knowledge_service as ks
 from ..core.swmf_root import resolve_swmf_root
+from ..knowledge import service as ks
+from ..reference.service import get_reference_catalog
 
 
 def _load_catalog() -> tuple[dict[str, Any] | None, Any | None]:
@@ -19,9 +19,9 @@ def _load_catalog() -> tuple[dict[str, Any] | None, Any | None]:
             "resolution_notes": root.resolution_notes,
         }, None
 
-    catalog_error, catalog = get_source_catalog(root=root, force_refresh=False)
+    catalog_error, catalog = get_reference_catalog(root=root, force_refresh=False)
     if catalog_error is not None or catalog is None:
-        return catalog_error or {"ok": False, "message": "Failed to load source catalog."}, None
+        return catalog_error or {"ok": False, "message": "Failed to load reference catalog."}, None
 
     return None, catalog
 
@@ -267,6 +267,7 @@ def get_param_schema_resource(component: str) -> dict[str, Any]:
                     catalog.swmf_root,
                     command_normalized=first_normalized,
                     max_results=6,
+                    ensure_ready=False,
                 )
             else:
                 source_evidence_note = (

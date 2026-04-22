@@ -133,6 +133,20 @@ ln -s /path/to/SWMF SWMF
 
 Once installed and connected in MCP, you can ask natural-language questions in chat and the assistant will call SWMF tools.
 
+For lower first-query latency on broad source-search questions, you can start the server with optional startup preindexing:
+
+```bash
+swmf-mcp-server --preindex-knowledge
+```
+
+Useful variants:
+
+```bash
+swmf-mcp-server --preindex-knowledge --swmf-root /absolute/path/to/SWMF
+swmf-mcp-server --preindex-knowledge --swmfsolar-root /absolute/path/to/SWMFSOLAR
+swmf-mcp-server --preindex-knowledge --force-rebuild-knowledge
+```
+
 Examples:
 - "Validate this PARAM.in for Frontera before I waste a run. Don't try to fix."
 - "Explain #COMPONENTMAP"

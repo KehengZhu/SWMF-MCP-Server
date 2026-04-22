@@ -18,8 +18,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import swmf_mcp_server.catalog.source_index_catalog as source_index_catalog_module
+import swmf_mcp_server.knowledge.service as knowledge_service_module
 
 from swmf_mcp_server.parsing.fortran_parser import FortranSymbol, parse_fortran_file
+from swmf_mcp_server.parsing.fortran_chunker import FortranCodeChunk, parse_fortran_chunks
 from swmf_mcp_server.parsing.perl_parser import PerlSymbol, parse_perl_file
 from swmf_mcp_server.catalog.source_index_catalog import SourceIndexCatalog
 from swmf_mcp_server.core import knowledge_service as ks
@@ -176,6 +179,27 @@ class TestFortranParser:
         assert parse_fortran_file("/nonexistent/path.f90") == []
 
 
+class TestFortranChunker:
+    def test_extracts_case_branch_chunks(self) -> None:
+        chunks = parse_fortran_chunks("dummy.f90", text=FORTRAN_SAMPLE)
+        stop_chunk = next(chunk for chunk in chunks if chunk.label.endswith("#STOP"))
+
+        assert stop_chunk.chunk_kind == "case_branch"
+        assert stop_chunk.symbol_name == "ReadParam"
+        assert "MaxIteration" in stop_chunk.text
+        assert "STOP" in stop_chunk.param_refs
+
+    def test_keeps_small_function_as_symbol_body_chunk(self) -> None:
+        chunks = parse_fortran_chunks("dummy.f90", text=FORTRAN_SAMPLE)
+        timestep_chunk = next(chunk for chunk in chunks if chunk.symbol_name == "CalcTimestep")
+
+        assert timestep_chunk.chunk_kind == "symbol_body"
+        assert "CalcTimestep = dx / maxval(speed)" in timestep_chunk.text
+
+    def test_missing_file_returns_empty(self) -> None:
+        assert parse_fortran_chunks("/nonexistent/path.f90") == []
+
+
 # ---------------------------------------------------------------------------
 # Perl parser
 # ---------------------------------------------------------------------------
@@ -253,6 +277,38 @@ class TestSourceIndexCatalog:
         gm_results = catalog.search_symbols("ModMain", component="GM")
         assert any(r["name"] == "ModMain" for r in gm_results)
 
+    def test_search_source_keyword_dispatch_matches_symbol_search(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build()
+
+        direct = catalog.search_symbols("ReadParam")
+        dispatched = catalog.search_source("ReadParam", search_mode="keyword")
+
+        assert dispatched == direct
+
+    def test_search_chunks_finds_case_branch_body_text(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build()
+
+        results = catalog.search_chunks("MaxIteration")
+
+        assert len(results) >= 1
+        assert any(
+            r["symbol_name"] == "ReadParam"
+            and r["chunk_kind"] == "case_branch"
+            and "MaxIteration" in r["chunk_text"]
+            for r in results
+        )
+
+    def test_search_chunks_can_filter_by_chunk_kind(self, fake_swmf_root: Path) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build()
+
+        results = catalog.search_chunks("TIMEACCURATE", chunk_kind="case_branch")
+
+        assert results
+        assert all(r["chunk_kind"] == "case_branch" for r in results)
+
     def test_lookup_symbol_exact(self, fake_swmf_root: Path) -> None:
         catalog = SourceIndexCatalog(fake_swmf_root)
         catalog.build()
@@ -264,6 +320,24 @@ class TestSourceIndexCatalog:
         catalog = SourceIndexCatalog(fake_swmf_root)
         catalog.build()
         assert catalog.lookup_symbol("readparam")  # lowercase
+
+    def test_retrieval_reuses_catalog_read_connection(self, fake_swmf_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        catalog = SourceIndexCatalog(fake_swmf_root)
+        catalog.build()
+
+        connect_calls = 0
+        real_connect = source_index_catalog_module._connect
+
+        def counted_connect(db_path: Path):
+            nonlocal connect_calls
+            connect_calls += 1
+            return real_connect(db_path)
+
+        monkeypatch.setattr(source_index_catalog_module, "_connect", counted_connect)
+
+        assert catalog.search_symbols("ReadParam")
+        assert catalog.lookup_symbol("ReadParam")
+        assert connect_calls == 1
 
     def test_get_param_evidence_finds_stop(self, fake_swmf_root: Path) -> None:
         catalog = SourceIndexCatalog(fake_swmf_root)
@@ -329,6 +403,50 @@ class TestSourceIndexCatalog:
 
 
 class TestKnowledgeService:
+    def test_catalog_cache_reuses_instance_for_same_extra_root_config(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import SLICE_SWMFSOLAR_SOURCE
+
+        ks._INDEX_BY_ROOT.clear()
+        ks._EXTRA_ROOTS_KEY_BY_ROOT.clear()
+
+        extra = [(str(fake_swmfsolar_root), SLICE_SWMFSOLAR_SOURCE)]
+        first = ks._get_catalog(str(fake_swmf_root), extra_roots=extra)
+        second = ks._get_catalog(str(fake_swmf_root), extra_roots=extra)
+
+        assert second is first
+
+    def test_catalog_cache_replaces_instance_when_extra_root_config_changes(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path, tmp_path: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import SLICE_SWMFSOLAR_SOURCE
+
+        ks._INDEX_BY_ROOT.clear()
+        ks._EXTRA_ROOTS_KEY_BY_ROOT.clear()
+
+        first_extra = [(str(fake_swmfsolar_root), SLICE_SWMFSOLAR_SOURCE)]
+        second_extra = [(str(tmp_path / "SWMFSOLAR_ALT"), SLICE_SWMFSOLAR_SOURCE)]
+
+        first = ks._get_catalog(str(fake_swmf_root), extra_roots=first_extra)
+        second = ks._get_catalog(str(fake_swmf_root), extra_roots=second_extra)
+
+        assert second is not first
+
+    def test_catalog_cache_without_extra_roots_reuses_last_configured_instance(
+        self, fake_swmf_root: Path, fake_swmfsolar_root: Path
+    ) -> None:
+        from swmf_mcp_server.catalog.source_index_catalog import SLICE_SWMFSOLAR_SOURCE
+
+        ks._INDEX_BY_ROOT.clear()
+        ks._EXTRA_ROOTS_KEY_BY_ROOT.clear()
+
+        extra = [(str(fake_swmfsolar_root), SLICE_SWMFSOLAR_SOURCE)]
+        configured = ks._get_catalog(str(fake_swmf_root), extra_roots=extra)
+        reused = ks._get_catalog(str(fake_swmf_root))
+
+        assert reused is configured
+
     def test_get_index_status_before_build(self, fake_swmf_root: Path) -> None:
         status = ks.get_index_status(str(fake_swmf_root))
         assert status.is_stale is True
@@ -342,6 +460,76 @@ class TestKnowledgeService:
         results = ks.search_symbols(str(fake_swmf_root), query="ReadParam")
         assert any(r["name"] == "ReadParam" for r in results)
 
+    def test_search_chunks_auto_builds_when_missing(self, fake_swmf_root: Path) -> None:
+        results = ks.search_chunks(str(fake_swmf_root), query="MaxIteration")
+        assert any(r["symbol_name"] == "ReadParam" for r in results)
+
+    def test_search_source_keyword_mode_returns_keyword_metadata(self, fake_swmf_root: Path) -> None:
+        payload = ks.search_source(str(fake_swmf_root), query="ReadParam")
+
+        assert any(r["name"] == "ReadParam" for r in payload["results"])
+        assert payload["search_mode_requested"] == "keyword"
+        assert payload["search_method"] == "keyword"
+        assert payload["semantic_available"] is False
+        assert payload["semantic_degraded_reason"] is None
+        assert payload["semantic_runtime"]["model_name"] is not None
+
+    def test_search_source_semantic_mode_gracefully_falls_back(self, fake_swmf_root: Path) -> None:
+        payload = ks.search_source(
+            str(fake_swmf_root),
+            query="ReadParam",
+            search_mode="semantic",
+            similarity_threshold=0.42,
+        )
+
+        assert any(r["name"] == "ReadParam" for r in payload["results"])
+        assert payload["search_mode_requested"] == "semantic"
+        assert payload["search_method"] == "keyword"
+        assert payload["semantic_available"] is False
+        assert payload["semantic_degraded_reason"] is not None
+        assert payload["semantic_runtime"]["availability_message"] is not None
+        assert payload["similarity_threshold"] == pytest.approx(0.42)
+
+    def test_search_source_semantic_mode_returns_chunk_results_when_backend_available(
+        self,
+        fake_swmf_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class FakeEmbedder:
+            backend_name = "fake"
+            availability_message = None
+
+            @property
+            def is_available(self) -> bool:
+                return True
+
+            def embed_query(self, text: str) -> list[float]:
+                lowered = text.lower()
+                return [1.0 if "maximum iteration" in lowered else 0.0, 0.0]
+
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                vectors: list[list[float]] = []
+                for text in texts:
+                    lowered = text.lower()
+                    vectors.append([1.0 if "maxiteration" in lowered else 0.0, 0.0])
+                return vectors
+
+        monkeypatch.setattr(knowledge_service_module, "get_text_embedder", lambda: FakeEmbedder())
+
+        payload = ks.search_source(
+            str(fake_swmf_root),
+            query="maximum iteration",
+            search_mode="semantic",
+        )
+
+        assert payload["search_mode_requested"] == "semantic"
+        assert payload["search_method"] == "semantic"
+        assert payload["semantic_available"] is True
+        assert payload["semantic_degraded_reason"] is None
+        assert payload["semantic_runtime"]["backend_name"] == "fake"
+        assert any(item.get("result_kind") == "chunk" for item in payload["results"])
+        assert any("MaxIteration" in item.get("chunk_text", "") for item in payload["results"])
+
     def test_get_param_evidence_via_service(self, fake_swmf_root: Path) -> None:
         ks.build_index(str(fake_swmf_root), force=True)
         evidence = ks.get_param_evidence(str(fake_swmf_root), command_normalized="STOP")
@@ -353,6 +541,7 @@ class TestKnowledgeService:
         payload = ks.status_as_payload(status)
         for key in ("ok", "db_path", "swmf_root", "schema_version", "symbol_count", "file_count", "is_stale"):
             assert key in payload
+        assert "semantic_runtime" in payload
 
 
 # ---------------------------------------------------------------------------
@@ -361,82 +550,133 @@ class TestKnowledgeService:
 
 
 class TestKnowledgeTools:
-    def test_refresh_tool_builds_index(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_refresh_knowledge_index
+    def test_catalog_build_tool_builds_index(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.catalog import swmf_build_catalog_index
 
-        result = swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
+        result = swmf_build_catalog_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
         assert result["ok"] is True
         assert result["symbol_count"] > 0
         assert result["action"] == "force_rebuild"
+        assert "semantic_runtime" not in result
 
-    def test_search_tool_returns_results(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_refresh_knowledge_index, swmf_search_source
+    def test_catalog_search_tool_returns_results(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.catalog import swmf_build_catalog_index, swmf_search_catalog
 
-        swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
-        result = swmf_search_source(query="ReadParam", swmf_root=str(fake_swmf_root))
+        swmf_build_catalog_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
+        result = swmf_search_catalog(query="ReadParam", swmf_root=str(fake_swmf_root))
         assert result["ok"] is True
         assert result["result_count"] >= 1
         assert result["authority"] == AUTHORITY_HEURISTIC
+        assert result["search_method"] == "keyword"
 
-    def test_search_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_search_source
+    def test_catalog_search_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.catalog import swmf_search_catalog
 
-        result = swmf_search_source(query="ReadParam", swmf_root=str(fake_swmf_root))
+        result = swmf_search_catalog(query="ReadParam", swmf_root=str(fake_swmf_root))
         assert result["ok"] is True
         assert result["result_count"] >= 1
 
-    def test_lookup_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_lookup_source_symbol
+    def test_knowledge_search_tool_reports_query_analysis(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_search_knowledge
 
-        result = swmf_lookup_source_symbol(name="ReadParam", swmf_root=str(fake_swmf_root))
+        result = swmf_search_knowledge(
+            query="Explain #STOP handling in ReadParam",
+            swmf_root=str(fake_swmf_root),
+        )
+
+        assert result["ok"] is True
+        assert result["result_count"] >= 1
+        assert result["query_analysis"]["intent"] == "param_lookup"
+        assert result["search_mode_requested"] in {"keyword", "hybrid"}
+
+    def test_knowledge_search_tool_semantic_mode_surfaces_chunk_results_when_backend_available(
+        self,
+        fake_swmf_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_search_knowledge
+
+        class FakeEmbedder:
+            backend_name = "fake"
+            availability_message = None
+
+            @property
+            def is_available(self) -> bool:
+                return True
+
+            def embed_query(self, text: str) -> list[float]:
+                return [1.0 if "maximum iteration" in text.lower() else 0.0, 0.0]
+
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                return [[1.0 if "maxiteration" in text.lower() else 0.0, 0.0] for text in texts]
+
+        monkeypatch.setattr(knowledge_service_module, "get_text_embedder", lambda: FakeEmbedder())
+
+        result = swmf_search_knowledge(
+            query="maximum iteration",
+            swmf_root=str(fake_swmf_root),
+            search_mode="semantic",
+        )
+
+        assert result["ok"] is True
+        assert result["search_method"] == "semantic"
+        assert result["semantic_available"] is True
+        assert result["semantic_degraded_reason"] is None
+        assert result["semantic_runtime"]["backend_name"] == "fake"
+        assert any(item.get("result_kind") == "chunk" for item in result["results"])
+
+    def test_catalog_lookup_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.catalog import swmf_lookup_catalog_symbol
+
+        result = swmf_lookup_catalog_symbol(name="ReadParam", swmf_root=str(fake_swmf_root))
         assert result["ok"] is True
         assert result["match_count"] >= 1
 
-    def test_param_evidence_tool_auto_builds_without_index(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_get_param_source_evidence
+    def test_understand_source_query_tool_shape(self) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_understand_source_query
 
-        result = swmf_get_param_source_evidence(command="#STOP", swmf_root=str(fake_swmf_root))
+        result = swmf_understand_source_query("Explain #STOP handling in ReadParam for GM")
+
         assert result["ok"] is True
-        assert result["evidence_count"] >= 1
+        assert result["intent"] == "param_lookup"
+        assert result["entities"]["param_commands"] == ["#STOP"]
 
-    def test_lookup_tool_shape(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_lookup_source_symbol, swmf_refresh_knowledge_index
+    def test_catalog_lookup_tool_shape(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.catalog import swmf_build_catalog_index, swmf_lookup_catalog_symbol
 
-        swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
-        result = swmf_lookup_source_symbol(name="ReadParam", swmf_root=str(fake_swmf_root))
+        swmf_build_catalog_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
+        result = swmf_lookup_catalog_symbol(name="ReadParam", swmf_root=str(fake_swmf_root))
         assert result["ok"] is True
         assert result["match_count"] >= 1
         assert all("file_path" in m for m in result["matches"])
 
-    def test_param_evidence_tool_shape(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_get_param_source_evidence, swmf_refresh_knowledge_index
+    def test_agent_context_pack_tool_shape(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_get_agent_context_pack
 
-        swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
-        result = swmf_get_param_source_evidence(command="#STOP", swmf_root=str(fake_swmf_root))
+        result = swmf_get_agent_context_pack(
+            query="Explain #STOP handling in ReadParam for GM",
+            swmf_root=str(fake_swmf_root),
+        )
+
         assert result["ok"] is True
-        assert result["command"] == "#STOP"
-        assert result["command_normalized"] == "STOP"
-        assert result["authority"] == AUTHORITY_HEURISTIC
-        assert "note" in result
+        assert result["grounded_context"]["briefing"]["focus_commands"] == ["#STOP"]
+        assert result["search_strategy"]["semantic_runtime"]["model_name"] is not None
 
-    def test_param_evidence_normalizes_hash_prefix(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_get_param_source_evidence, swmf_refresh_knowledge_index
+    def test_knowledge_status_tool_shape(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_build_knowledge_index, swmf_get_knowledge_status
 
-        swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
-        # Both "#STOP" and "STOP" should work
-        r1 = swmf_get_param_source_evidence(command="#STOP", swmf_root=str(fake_swmf_root))
-        r2 = swmf_get_param_source_evidence(command="STOP", swmf_root=str(fake_swmf_root))
-        assert r1["command_normalized"] == r2["command_normalized"] == "STOP"
-
-    def test_status_tool_shape(self, fake_swmf_root: Path) -> None:
-        from swmf_mcp_server.tools.knowledge import swmf_get_knowledge_index_status, swmf_refresh_knowledge_index
-
-        swmf_refresh_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
-        result = swmf_get_knowledge_index_status(swmf_root=str(fake_swmf_root))
+        swmf_build_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
+        result = swmf_get_knowledge_status(swmf_root=str(fake_swmf_root))
         assert result["ok"] is True
         assert result["is_stale"] is False
-        assert "symbol_count" in result
-        assert "file_count" in result
+        assert "semantic_runtime" in result
+
+    def test_knowledge_build_tool_shape(self, fake_swmf_root: Path) -> None:
+        from swmf_mcp_server.tools.knowledge import swmf_build_knowledge_index
+
+        result = swmf_build_knowledge_index(swmf_root=str(fake_swmf_root), force_rebuild=True)
+        assert result["ok"] is True
+        assert "semantic_runtime" in result
 
 
 # ---------------------------------------------------------------------------
@@ -569,14 +809,21 @@ def test_knowledge_tools_registered_in_server() -> None:
     """Public knowledge tools are exported from the server module."""
     from swmf_mcp_server import server
 
-    assert hasattr(server, "swmf_search_source")
-    assert callable(getattr(server, "swmf_search_source"))
-    assert hasattr(server, "swmf_lookup_source_symbol")
-    assert callable(getattr(server, "swmf_lookup_source_symbol"))
-    assert hasattr(server, "swmf_get_knowledge_index_status")
-    assert callable(getattr(server, "swmf_get_knowledge_index_status"))
-    assert not hasattr(server, "swmf_refresh_knowledge_index")
-    assert not hasattr(server, "swmf_get_param_source_evidence")
+    assert hasattr(server, "swmf_build_catalog_index")
+    assert callable(getattr(server, "swmf_build_catalog_index"))
+    assert hasattr(server, "swmf_search_catalog")
+    assert callable(getattr(server, "swmf_search_catalog"))
+    assert hasattr(server, "swmf_build_knowledge_index")
+    assert callable(getattr(server, "swmf_build_knowledge_index"))
+    assert hasattr(server, "swmf_search_knowledge")
+    assert callable(getattr(server, "swmf_search_knowledge"))
+    assert hasattr(server, "swmf_understand_source_query")
+    assert callable(getattr(server, "swmf_understand_source_query"))
+    assert hasattr(server, "swmf_get_agent_context_pack")
+    assert callable(getattr(server, "swmf_get_agent_context_pack"))
+    assert not hasattr(server, "swmf_search_source")
+    assert not hasattr(server, "swmf_lookup_source_symbol")
+    assert not hasattr(server, "swmf_get_knowledge_index_status")
 
 
 # ---------------------------------------------------------------------------

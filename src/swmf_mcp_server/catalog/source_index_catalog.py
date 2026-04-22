@@ -56,7 +56,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ..core.authority import (
     AUTHORITY_HEURISTIC,
@@ -66,6 +66,7 @@ from ..core.authority import (
     SOURCE_KIND_PERL_SOURCE,
 )
 from ..core.models import KnowledgeIndexStatus
+from ..parsing.fortran_chunker import parse_fortran_chunks
 from ..parsing.fortran_parser import parse_fortran_file
 from ..parsing.idl_parser import parse_idl_file
 from ..parsing.perl_parser import parse_perl_file
@@ -74,10 +75,18 @@ from ..parsing.perl_parser import parse_perl_file
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 CACHE_DIR_NAME = ".swmf_mcp_cache"
 DB_FILE_NAME = "knowledge.db"
 ENV_DB_OVERRIDE = "SWMF_MCP_KNOWLEDGE_DB"
+SEARCH_MODE_KEYWORD = "keyword"
+SEARCH_MODE_SEMANTIC = "semantic"
+SEARCH_MODE_HYBRID = "hybrid"
+_SEARCH_MODES = frozenset({
+    SEARCH_MODE_KEYWORD,
+    SEARCH_MODE_SEMANTIC,
+    SEARCH_MODE_HYBRID,
+})
 
 # Corpus slice labels (strings matching CorpusSlice enum values used by
 # the old swmf_semantic_index package — kept identical for compatibility)
@@ -153,6 +162,31 @@ CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
     content_rowid='id'
 );
 
+CREATE TABLE IF NOT EXISTS code_chunks (
+    id          INTEGER PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES source_files(id) ON DELETE CASCADE,
+    symbol_name TEXT    NOT NULL,
+    chunk_kind  TEXT    NOT NULL,
+    label       TEXT    NOT NULL,
+    start_line  INTEGER,
+    end_line    INTEGER,
+    component   TEXT,
+    chunk_text  TEXT    NOT NULL,
+    uses        TEXT,
+    param_refs  TEXT,
+    source_kind TEXT    NOT NULL,
+    authority   TEXT    NOT NULL DEFAULT 'heuristic'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_fts USING fts5(
+    symbol_name,
+    label,
+    chunk_text,
+    component,
+    content='code_chunks',
+    content_rowid='id'
+);
+
 CREATE TABLE IF NOT EXISTS param_mentions (
     id                 INTEGER PRIMARY KEY,
     command_normalized TEXT    NOT NULL,
@@ -168,6 +202,9 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name       ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_component   ON symbols(component);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind        ON symbols(kind);
 CREATE INDEX IF NOT EXISTS idx_symbols_file        ON symbols(file_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_symbol_name  ON code_chunks(symbol_name);
+CREATE INDEX IF NOT EXISTS idx_chunks_kind         ON code_chunks(chunk_kind);
+CREATE INDEX IF NOT EXISTS idx_chunks_file         ON code_chunks(file_id);
 CREATE INDEX IF NOT EXISTS idx_param_cmd           ON param_mentions(command_normalized);
 CREATE INDEX IF NOT EXISTS idx_param_file          ON param_mentions(file_id);
 CREATE INDEX IF NOT EXISTS idx_files_corpus_root   ON source_files(corpus_root);
@@ -192,14 +229,36 @@ CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
     INSERT INTO symbols_fts(rowid, name, docstring, component)
     VALUES (new.id, new.name, COALESCE(new.docstring,''), COALESCE(new.component,''));
 END;
+
+CREATE TRIGGER IF NOT EXISTS code_chunks_ai AFTER INSERT ON code_chunks BEGIN
+    INSERT INTO code_chunks_fts(rowid, symbol_name, label, chunk_text, component)
+    VALUES (new.id, new.symbol_name, new.label, new.chunk_text, COALESCE(new.component,''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS code_chunks_ad AFTER DELETE ON code_chunks BEGIN
+    INSERT INTO code_chunks_fts(code_chunks_fts, rowid, symbol_name, label, chunk_text, component)
+    VALUES ('delete', old.id, old.symbol_name, old.label, old.chunk_text, COALESCE(old.component,''));
+END;
+
+CREATE TRIGGER IF NOT EXISTS code_chunks_au AFTER UPDATE ON code_chunks BEGIN
+    INSERT INTO code_chunks_fts(code_chunks_fts, rowid, symbol_name, label, chunk_text, component)
+    VALUES ('delete', old.id, old.symbol_name, old.label, old.chunk_text, COALESCE(old.component,''));
+    INSERT INTO code_chunks_fts(rowid, symbol_name, label, chunk_text, component)
+    VALUES (new.id, new.symbol_name, new.label, new.chunk_text, COALESCE(new.component,''));
+END;
 """
 
 # Schema teardown for full rebuild
 _DROP_TABLES = """
+DROP TRIGGER IF EXISTS code_chunks_au;
+DROP TRIGGER IF EXISTS code_chunks_ad;
+DROP TRIGGER IF EXISTS code_chunks_ai;
 DROP TRIGGER IF EXISTS symbols_au;
 DROP TRIGGER IF EXISTS symbols_ad;
 DROP TRIGGER IF EXISTS symbols_ai;
 DROP TABLE IF EXISTS param_mentions;
+DROP TABLE IF EXISTS code_chunks_fts;
+DROP TABLE IF EXISTS code_chunks;
 DROP TABLE IF EXISTS symbols_fts;
 DROP TABLE IF EXISTS symbols;
 DROP TABLE IF EXISTS source_files;
@@ -253,6 +312,13 @@ def _db_path_for(swmf_root: str | Path) -> Path:
     if override:
         return Path(override).expanduser()
     return Path(swmf_root) / CACHE_DIR_NAME / DB_FILE_NAME
+
+
+def _normalize_search_mode(search_mode: str | None) -> str:
+    normalized = (search_mode or SEARCH_MODE_KEYWORD).strip().lower()
+    if normalized in _SEARCH_MODES:
+        return normalized
+    return SEARCH_MODE_KEYWORD
 
 
 def _classify_corpus_slice(lang: str, rel_path: str, default_slice: str) -> str:
@@ -400,7 +466,9 @@ def _index_fortran(
                 source_kind, AUTHORITY_HEURISTIC,
             ),
         )
-        inserted.append((cur.lastrowid, sym.param_refs))
+        symbol_id = cur.lastrowid
+        assert symbol_id is not None
+        inserted.append((symbol_id, sym.param_refs))
     return inserted
 
 
@@ -422,7 +490,9 @@ def _index_perl(
                 sym.docstring, source_kind, AUTHORITY_HEURISTIC,
             ),
         )
-        inserted.append((cur.lastrowid, sym.param_refs))
+        symbol_id = cur.lastrowid
+        assert symbol_id is not None
+        inserted.append((symbol_id, sym.param_refs))
     return inserted
 
 
@@ -444,7 +514,9 @@ def _index_idl(
                 sig.docstring, source_kind, AUTHORITY_HEURISTIC,
             ),
         )
-        inserted.append((cur.lastrowid, []))
+        symbol_id = cur.lastrowid
+        assert symbol_id is not None
+        inserted.append((symbol_id, []))
     return inserted
 
 
@@ -491,6 +563,35 @@ def _store_param_mentions(
             )
 
 
+def _index_fortran_chunks(
+    conn: sqlite3.Connection,
+    file_id: int,
+    path: Path,
+    text: str,
+    source_kind: str,
+) -> None:
+    for chunk in parse_fortran_chunks(path, text=text):
+        conn.execute(
+            "INSERT INTO code_chunks "
+            "(file_id, symbol_name, chunk_kind, label, start_line, end_line, component, chunk_text, uses, param_refs, source_kind, authority) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                file_id,
+                chunk.symbol_name,
+                chunk.chunk_kind,
+                chunk.label,
+                chunk.start_line,
+                chunk.end_line,
+                chunk.component,
+                chunk.text[:_MAX_CHUNK_CHARS],
+                json.dumps(chunk.uses) if chunk.uses else None,
+                json.dumps(chunk.param_refs) if chunk.param_refs else None,
+                source_kind,
+                AUTHORITY_HEURISTIC,
+            ),
+        )
+
+
 def _index_file(
     conn: sqlite3.Connection,
     path: Path,
@@ -523,10 +624,12 @@ def _index_file(
         (str(path.resolve()), lang, corpus_root, corpus_slice, mtime, digest, now),
     )
     file_id = cur.lastrowid
+    assert file_id is not None
 
     if lang == "fortran":
         entries = _index_fortran(conn, file_id, path, text, source_kind)
         _store_param_mentions(conn, file_id, entries, source_kind)
+        _index_fortran_chunks(conn, file_id, path, text, source_kind)
     elif lang == "perl":
         entries = _index_perl(conn, file_id, path, text, source_kind)
         _store_param_mentions(conn, file_id, entries, source_kind)
@@ -562,6 +665,15 @@ def _symbol_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
+def _chunk_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    uses_raw = d.get("uses")
+    param_refs_raw = d.get("param_refs")
+    d["uses"] = json.loads(uses_raw) if uses_raw else []
+    d["param_refs"] = json.loads(param_refs_raw) if param_refs_raw else []
+    return d
+
+
 # ---------------------------------------------------------------------------
 # Main catalog class
 # ---------------------------------------------------------------------------
@@ -584,13 +696,27 @@ class SourceIndexCatalog:
         self,
         swmf_root: str | Path,
         *,
-        extra_roots: list[tuple[str | Path, str]] | None = None,
+        extra_roots: Sequence[tuple[str | Path, str]] | None = None,
     ) -> None:
         self._swmf_root = Path(swmf_root).resolve()
         self._db_path = _db_path_for(self._swmf_root)
         self._extra_roots: list[tuple[Path, str]] = [
             (Path(p).resolve(), s) for p, s in (extra_roots or [])
         ]
+        self._read_conn: sqlite3.Connection | None = None
+
+    def _close_read_conn(self) -> None:
+        if self._read_conn is None:
+            return
+        try:
+            self._read_conn.close()
+        except sqlite3.Error:
+            pass
+        self._read_conn = None
+
+    @property
+    def swmf_root(self) -> str:
+        return str(self._swmf_root)
 
     # ------------------------------------------------------------------
     # Status
@@ -674,6 +800,7 @@ class SourceIndexCatalog:
             if status.ok and not status.is_stale:
                 return status
 
+        self._close_read_conn()
         conn = _connect(self._db_path)
         try:
             # Wipe and recreate schema (executescript auto-commits pending tx)
@@ -688,6 +815,7 @@ class SourceIndexCatalog:
 
                 # Populate FTS index from the content table in one shot
                 conn.execute("INSERT INTO symbols_fts(symbols_fts) VALUES ('rebuild')")
+                conn.execute("INSERT INTO code_chunks_fts(code_chunks_fts) VALUES ('rebuild')")
 
                 now = time.time()
                 corpus_root_strs = [str(self._swmf_root)] + [
@@ -737,6 +865,7 @@ class SourceIndexCatalog:
         if db_schema != SCHEMA_VERSION:
             return self.build(force=True)
 
+        self._close_read_conn()
         conn = _connect(self._db_path)
         try:
             # Ensure FTS triggers exist (no-op if already installed)
@@ -805,9 +934,17 @@ class SourceIndexCatalog:
     def _require_db(self) -> sqlite3.Connection | None:
         if not self._db_path.exists():
             return None
+        if self._read_conn is not None:
+            try:
+                self._read_conn.execute("SELECT 1")
+                return self._read_conn
+            except sqlite3.Error:
+                self._close_read_conn()
         try:
-            return _connect(self._db_path)
+            self._read_conn = _connect(self._db_path)
+            return self._read_conn
         except sqlite3.Error:
+            self._read_conn = None
             return None
 
     # ------------------------------------------------------------------
@@ -857,8 +994,91 @@ class SourceIndexCatalog:
             except sqlite3.Error:
                 pass
 
-        conn.close()
         return results
+
+    def search_source(
+        self,
+        query: str,
+        component: str | None = None,
+        kind: str | None = None,
+        corpus_slice: str | None = None,
+        max_results: int = 20,
+        search_mode: str = SEARCH_MODE_KEYWORD,
+    ) -> list[dict[str, Any]]:
+        """Keyword source retrieval.
+
+        The catalog domain owns index-backed keyword search only. Semantic and
+        hybrid ranking are handled by the knowledge domain.
+        """
+        _ = _normalize_search_mode(search_mode)
+        return self.search_symbols(
+            query=query,
+            component=component,
+            kind=kind,
+            corpus_slice=corpus_slice,
+            max_results=max_results,
+        )
+
+    def search_chunks(
+        self,
+        query: str,
+        component: str | None = None,
+        chunk_kind: str | None = None,
+        corpus_slice: str | None = None,
+        max_results: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Search meaning-bearing code chunks extracted from source bodies."""
+        conn = self._require_db()
+        if conn is None:
+            return []
+
+        results: list[dict[str, Any]] = []
+        try:
+            results = self._search_chunks_fts5(
+                conn,
+                query,
+                component=component,
+                chunk_kind=chunk_kind,
+                corpus_slice=corpus_slice,
+                max_results=max_results,
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        if not results:
+            try:
+                results = self._search_chunks_like(
+                    conn,
+                    query,
+                    component=component,
+                    chunk_kind=chunk_kind,
+                    corpus_slice=corpus_slice,
+                    max_results=max_results,
+                )
+            except sqlite3.Error:
+                pass
+
+        return results
+
+    def list_chunks(
+        self,
+        component: str | None = None,
+        chunk_kind: str | None = None,
+        corpus_slice: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return raw indexed chunks for downstream knowledge-domain ranking."""
+        conn = self._require_db()
+        if conn is None:
+            return []
+        try:
+            return self._list_chunks(
+                conn,
+                component=component,
+                chunk_kind=chunk_kind,
+                corpus_slice=corpus_slice,
+            )
+        except sqlite3.Error:
+            return []
 
     def _search_fts5(
         self,
@@ -933,6 +1153,110 @@ class SourceIndexCatalog:
         rows = conn.execute(sql, params).fetchall()
         return [_symbol_row_to_dict(row) for row in rows]
 
+    def _search_chunks_fts5(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        *,
+        component: str | None,
+        chunk_kind: str | None,
+        corpus_slice: str | None,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        fts_q = _safe_fts_query(query)
+        params: list[Any] = [fts_q]
+        extra_where = ""
+        if component:
+            extra_where += " AND UPPER(c.component) = UPPER(?)"
+            params.append(component)
+        if chunk_kind:
+            extra_where += " AND c.chunk_kind = ?"
+            params.append(chunk_kind)
+        if corpus_slice:
+            extra_where += " AND f.corpus_slice = ?"
+            params.append(corpus_slice)
+        params.append(max_results)
+
+        sql = (
+            "SELECT c.symbol_name, c.chunk_kind, c.label, c.start_line, c.end_line, c.component, "
+            "       c.chunk_text, c.uses, c.param_refs, c.source_kind, c.authority, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
+            "FROM code_chunks_fts fts "
+            "JOIN code_chunks c ON fts.rowid = c.id "
+            "JOIN source_files f ON c.file_id = f.id "
+            f"WHERE code_chunks_fts MATCH ?{extra_where} "
+            "ORDER BY rank LIMIT ?"
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [_chunk_row_to_dict(row) for row in rows]
+
+    def _search_chunks_like(
+        self,
+        conn: sqlite3.Connection,
+        query: str,
+        *,
+        component: str | None,
+        chunk_kind: str | None,
+        corpus_slice: str | None,
+        max_results: int,
+    ) -> list[dict[str, Any]]:
+        like = f"%{query.lower()}%"
+        params: list[Any] = [like, like, like]
+        where = (
+            "WHERE (LOWER(c.symbol_name) LIKE ? OR LOWER(c.label) LIKE ? OR LOWER(c.chunk_text) LIKE ?)"
+        )
+        if component:
+            where += " AND UPPER(c.component) = UPPER(?)"
+            params.append(component)
+        if chunk_kind:
+            where += " AND c.chunk_kind = ?"
+            params.append(chunk_kind)
+        if corpus_slice:
+            where += " AND f.corpus_slice = ?"
+            params.append(corpus_slice)
+        params.append(max_results)
+
+        sql = (
+            "SELECT c.symbol_name, c.chunk_kind, c.label, c.start_line, c.end_line, c.component, "
+            "       c.chunk_text, c.uses, c.param_refs, c.source_kind, c.authority, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
+            "FROM code_chunks c JOIN source_files f ON c.file_id = f.id "
+            f"{where} ORDER BY c.symbol_name, c.start_line LIMIT ?"
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [_chunk_row_to_dict(row) for row in rows]
+
+    def _list_chunks(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        component: str | None,
+        chunk_kind: str | None = None,
+        corpus_slice: str | None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        where: list[str] = []
+        if component:
+            where.append("UPPER(c.component) = UPPER(?)")
+            params.append(component)
+        if chunk_kind:
+            where.append("c.chunk_kind = ?")
+            params.append(chunk_kind)
+        if corpus_slice:
+            where.append("f.corpus_slice = ?")
+            params.append(corpus_slice)
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        sql = (
+            "SELECT c.id, c.symbol_name, c.chunk_kind, c.label, c.start_line, c.end_line, c.component, "
+            "       c.chunk_text, c.uses, c.param_refs, c.source_kind, c.authority, "
+            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
+            "FROM code_chunks c JOIN source_files f ON c.file_id = f.id "
+            f"{where_sql} ORDER BY f.path, c.start_line"
+        )
+        rows = conn.execute(sql, params).fetchall()
+        return [_chunk_row_to_dict(row) for row in rows]
+
     def lookup_symbol(self, name: str, kind: str | None = None) -> list[dict[str, Any]]:
         """Exact (case-insensitive) symbol name lookup."""
         conn = self._require_db()
@@ -956,8 +1280,6 @@ class SourceIndexCatalog:
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.Error:
             rows = []
-        finally:
-            conn.close()
 
         return [_symbol_row_to_dict(row) for row in rows]
 
@@ -1014,8 +1336,6 @@ class SourceIndexCatalog:
                         results.append(record)
         except sqlite3.Error:
             pass
-        finally:
-            conn.close()
 
         return results
 
@@ -1036,7 +1356,5 @@ class SourceIndexCatalog:
             rows = conn.execute(sql, (file_path,)).fetchall()
         except sqlite3.Error:
             rows = []
-        finally:
-            conn.close()
 
         return [_symbol_row_to_dict(row) for row in rows]
