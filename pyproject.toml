@@ -12,6 +12,7 @@ dependencies = [
   "astropy>=7.2.0",
   "httpx>=0.28.1",
   "mcp[cli]>=1.0.0,<2.0.0",
+  "pip>=26.0.1",
   "pytest>=9.0.2",
 ]
 authors = [
@@ -23,8 +24,10 @@ swmf-mcp-server = "swmf_mcp_server.server:main"
 
 [project.optional-dependencies]
 semantic = [
-  "sentence-transformers>=3.0.0",
-  "torch>=2.2.0",
+  "fastembed>=0.8.0",
+]
+semantic-gpu = [
+  "fastembed-gpu>=0.8.0",
 ]
 test = [
   "pytest>=8.2.0",

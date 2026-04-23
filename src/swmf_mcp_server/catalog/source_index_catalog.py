@@ -300,10 +300,21 @@ def _source_kind_for(language: str) -> str:
     }.get(language, SOURCE_KIND_FORTRAN_SOURCE)
 
 
+_COPILOT_SESSION_HEADER = b"# \xf0\x9f\xa4\x96 Copilot CLI Session"  # UTF-8 bytes
+
 def _should_skip(path: Path) -> bool:
     for part in path.parts:
         if part in _SKIP_DIRS or (part.startswith(".") and part not in {".", ".."}):
             return True
+    # Skip Copilot CLI session log files (they appear as .md files in arbitrary dirs)
+    if path.suffix.lower() in (".md", ".rst"):
+        try:
+            with path.open("rb") as fh:
+                header = fh.read(40)
+            if header.lstrip(b"\xef\xbb\xbf").startswith(_COPILOT_SESSION_HEADER):
+                return True
+        except OSError:
+            pass
     return False
 
 
@@ -643,11 +654,44 @@ def _index_file(
 # FTS5 query helper
 # ---------------------------------------------------------------------------
 
+# English words that appear in natural-language queries but not in Fortran
+# symbol names or docstrings.  These are removed before FTS5 AND matching so
+# that broad queries like "interpolation methods in SWMF" reduce to the
+# meaningful domain token "interpolation" rather than failing because "methods"
+# and "in" never appear in a subroutine name.
+_FTS_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "by",
+    "do", "does", "for", "from", "get", "getting",
+    "how", "in", "into", "is", "it", "its",
+    "list", "look", "looking",
+    "me", "method", "methods",
+    "of", "on", "or",
+    "related", "return", "returns",
+    "search", "show", "some", "source", "swmf", "swmfsolar",
+    "that", "the", "their", "them", "there", "these", "they",
+    "this", "to", "type", "types",
+    "use", "used", "uses", "using",
+    "was", "what", "where", "which", "with",
+})
+
 
 def _safe_fts_query(query: str) -> str:
-    """Convert free text to a safe FTS5 MATCH expression (AND semantics)."""
+    """Convert free text to a safe FTS5 MATCH expression (AND semantics).
+
+    English stopwords are stripped before building the expression so that
+    natural-language queries (e.g. "interpolation methods in SWMF") match
+    domain symbols (e.g. ``interpolation_amr_gc``) instead of failing because
+    every token must appear in the symbol text.
+    """
     cleaned = re.sub(r'["\(\)\:\*\^\+\-]', " ", query.strip())
-    tokens = [t for t in cleaned.split() if len(t) > 1]
+    tokens = [
+        t for t in cleaned.split()
+        if len(t) > 1 and t.lower() not in _FTS_STOPWORDS
+    ]
+    if not tokens:
+        # All tokens were stopwords; fall back to the original cleaned query
+        # so callers can still attempt a LIKE search.
+        tokens = [t for t in cleaned.split() if len(t) > 1]
     if not tokens:
         return '""'
     return " ".join(tokens)
@@ -734,7 +778,7 @@ class SourceIndexCatalog:
                 file_count=0,
                 last_built_epoch_s=None,
                 is_stale=True,
-                message="Index not yet built. Call swmf_refresh_knowledge_index to build it.",
+                message="Index not yet built. Run the server with --preindex-knowledge or call get_evidence to build it on demand.",
                 corpus_roots=[],
             )
 
@@ -1127,31 +1171,52 @@ class SourceIndexCatalog:
         corpus_slice: str | None,
         max_results: int,
     ) -> list[dict[str, Any]]:
-        like = f"%{query.lower()}%"
-        params: list[Any] = [like, like]
-        where = (
-            "WHERE (LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.docstring,'')) LIKE ?)"
-        )
-        if component:
-            where += " AND UPPER(s.component) = UPPER(?)"
-            params.append(component)
-        if kind:
-            where += " AND s.kind = ?"
-            params.append(kind)
-        if corpus_slice:
-            where += " AND f.corpus_slice = ?"
-            params.append(corpus_slice)
-        params.append(max_results)
+        # First attempt: full phrase as a single LIKE substring.
+        # Second attempt (if first returns nothing): try each content token
+        # individually so that broad NL queries like "interpolation methods"
+        # still match symbol names like "interpolation_amr_gc".
+        candidate_likes: list[str] = [query.lower()]
+        content_tokens = [
+            t.lower()
+            for t in query.split()
+            if len(t) > 2 and t.lower() not in _FTS_STOPWORDS
+        ]
+        candidate_likes.extend(content_tokens)
 
-        sql = (
-            "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
-            "       s.source_kind, s.authority, s.uses, "
-            "       f.path AS file_path, f.corpus_root, f.corpus_slice "
-            "FROM symbols s JOIN source_files f ON s.file_id = f.id "
-            f"{where} ORDER BY s.name LIMIT ?"
-        )
-        rows = conn.execute(sql, params).fetchall()
-        return [_symbol_row_to_dict(row) for row in rows]
+        for attempt, term in enumerate(candidate_likes):
+            like = f"%{term}%"
+            params: list[Any] = [like, like]
+            where = (
+                "WHERE (LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.docstring,'')) LIKE ?)"
+            )
+            if component:
+                where += " AND UPPER(s.component) = UPPER(?)"
+                params.append(component)
+            if kind:
+                where += " AND s.kind = ?"
+                params.append(kind)
+            if corpus_slice:
+                where += " AND f.corpus_slice = ?"
+                params.append(corpus_slice)
+            params.append(max_results)
+
+            sql = (
+                "SELECT s.name, s.kind, s.start_line, s.component, s.docstring, "
+                "       s.source_kind, s.authority, s.uses, "
+                "       f.path AS file_path, f.corpus_root, f.corpus_slice "
+                "FROM symbols s JOIN source_files f ON s.file_id = f.id "
+                f"{where} ORDER BY s.name LIMIT ?"
+            )
+            rows = conn.execute(sql, params).fetchall()
+            if rows:
+                return [_symbol_row_to_dict(row) for row in rows]
+            # If this was the full-phrase attempt and it failed, fall through
+            # to individual token attempts (but only if tokens differ from
+            # the full phrase).
+            if attempt == 0 and (not content_tokens or content_tokens == [query.lower()]):
+                break
+
+        return []
 
     def _search_chunks_fts5(
         self,

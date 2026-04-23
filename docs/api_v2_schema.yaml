@@ -1,0 +1,159 @@
+# SWMF MCP Public API - v2 Schema
+#
+# Live contract: the server exposes exactly five public MCP tools and no MCP
+# resources. Parser, catalog, reference, and knowledge modules may exist only
+# as private implementation infrastructure behind these tools.
+
+base_output_shape:
+  ok: boolean
+  summary: string
+  evidence: array
+  provenance: object
+  uncertainty:
+    known_unknowns: array[string]
+
+tools:
+  get_context:
+    description: >
+      Give compact repo or task orientation for a question. Use this for broad
+      architecture, coupling, or "where should I look?" questions.
+    input_schema:
+      question: {type: string, required: true}
+      scope: {type: array[string], required: false, default: []}
+      task_type:
+        type: string
+        required: false
+        default: architecture
+        enum: [architecture, debug, lookup, workflow, compare]
+      detail:
+        type: string
+        required: false
+        default: normal
+        enum: [brief, normal, deep]
+      swmf_root: {type: string, required: false}
+      run_dir: {type: string, required: false}
+    output_schema:
+      ok: boolean
+      summary: string
+      entities:
+        components: array[string]
+        files: array[string]
+        params: array[string]
+        symbols: array[string]
+      evidence: array[EvidenceItem]
+      provenance:
+        backend_used: string
+      uncertainty:
+        known_unknowns: array[string]
+
+  get_evidence:
+    description: >
+      Retrieve grounded local evidence for a query. Use this for exact lookup,
+      symbol or parameter evidence, source snippets, documentation, examples,
+      and IDL-related evidence.
+    input_schema:
+      query: {type: string, required: true}
+      mode:
+        type: string
+        required: false
+        default: hybrid
+        enum: [hybrid, keyword, semantic]
+      scope: {type: array[string], required: false, default: []}
+      top_k: {type: integer, required: false, default: 8, min: 1, max: 100}
+      goal: {type: string, required: false, default: ""}
+      swmf_root: {type: string, required: false}
+      run_dir: {type: string, required: false}
+    output_schema:
+      ok: boolean
+      summary: string
+      evidence: array[EvidenceItem]
+      provenance:
+        mode_used: string
+        scope: array[string]
+      uncertainty:
+        known_unknowns: array[string]
+
+  get_workflow_guidance:
+    description: >
+      Return likely workflow entrypoints and usage evidence for configuration,
+      build, run, or analysis goals. This tool does not execute commands.
+    input_schema:
+      goal: {type: string, required: true}
+      module: {type: string, required: false}
+      task_type:
+        type: string
+        required: false
+        default: configuration
+        enum: [configuration, build, run, analysis]
+      context: {type: object, required: false, default: {}}
+      swmf_root: {type: string, required: false}
+      run_dir: {type: string, required: false}
+    output_schema:
+      ok: boolean
+      summary: string
+      entrypoints: array[EntrypointItem]
+      usage_evidence: array[EvidenceItem]
+      required_inputs: array[string]
+      constraints: array[string]
+      evidence: array[EvidenceItem]
+      provenance:
+        backend_used: string
+      uncertainty:
+        known_unknowns: array[string]
+
+  inspect_artifact:
+    description: >
+      Inspect a local artifact such as a log, PARAM file, XML file, run
+      directory, build output, or result file and return structured findings.
+    input_schema:
+      artifact_type:
+        type: string
+        required: true
+        enum: [log, param, xml, run_dir, build_output, result]
+      path: {type: string, required: true}
+      question: {type: string, required: false, default: ""}
+      swmf_root: {type: string, required: false}
+      run_dir: {type: string, required: false}
+    output_schema:
+      ok: boolean
+      summary: string
+      findings: array[FindingItem]
+      evidence: array[EvidenceItem]
+      provenance:
+        artifact_type: string
+        path: string
+      uncertainty:
+        known_unknowns: array[string]
+
+  compare_artifacts:
+    description: >
+      Compare two local artifacts and return differences with evidence. Use for
+      PARAM, log, run-directory, and generic file comparisons.
+    input_schema:
+      left: {type: string, required: true}
+      right: {type: string, required: true}
+      comparison_type:
+        type: string
+        required: false
+        enum: [auto, param, log, run_dir, file]
+        default: auto
+      question: {type: string, required: false, default: ""}
+      swmf_root: {type: string, required: false}
+      run_dir: {type: string, required: false}
+    output_schema:
+      ok: boolean
+      summary: string
+      differences: array[DifferenceItem]
+      evidence: array[EvidenceItem]
+      provenance:
+        left: string
+        right: string
+        comparison_type: string
+      uncertainty:
+        known_unknowns: array[string]
+
+public_surface_rules:
+  - The server registers only the five tools listed above.
+  - The tools package exports only the five public tool modules listed above.
+  - No MCP resources or resource templates are registered.
+  - No legacy MCP-facing tool aliases are supported.

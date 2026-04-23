@@ -11,8 +11,8 @@ def test_catalog_index_does_not_import_embedding_modules() -> None:
     forbidden = {
         "swmf_mcp_server.core.semantic_search",
         "swmf_mcp_server.knowledge",
-        "torch",
-        "sentence_transformers",
+        "fastembed",
+        "onnxruntime",
     }
 
     for node in ast.walk(tree):

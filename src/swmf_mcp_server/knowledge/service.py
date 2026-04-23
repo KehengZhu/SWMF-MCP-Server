@@ -20,10 +20,10 @@ from ..catalog.source_index_catalog import (
 )
 from ..core.models import KnowledgeIndexStatus
 from ..reference.service import (
-    swmf_explain_idl_procedure,
-    swmf_find_param_command,
-    swmf_get_component_versions,
-    swmf_trace_param_command,
+    explain_idl_procedure_for_root,
+    find_param_command_for_root,
+    get_component_versions_for_root,
+    trace_param_command_for_root,
 )
 from .agent_context import build_agent_context_pack
 from .embeddings import get_text_embedder, get_text_embedder_runtime_payload
@@ -532,19 +532,19 @@ def _collect_reference_context(swmf_root: str, analysis_payload: dict[str, Any])
         param_context.append(
             {
                 "command": command,
-                "definition": swmf_find_param_command(name=command, swmf_root=swmf_root),
-                "trace": swmf_trace_param_command(name=command, swmf_root=swmf_root),
+                "definition": find_param_command_for_root(name=command, swmf_root=swmf_root),
+                "trace": trace_param_command_for_root(name=command, swmf_root=swmf_root),
             }
         )
 
     component_context = [
-        swmf_get_component_versions(component=component, swmf_root=swmf_root)
+        get_component_versions_for_root(component=component, swmf_root=swmf_root)
         for component in entities.get("components", [])[:3]
     ]
 
     idl_context = []
     for name in entities.get("idl_procedure_hints", [])[:3]:
-        payload = swmf_explain_idl_procedure(name=name, swmf_root=swmf_root)
+        payload = explain_idl_procedure_for_root(name=name, swmf_root=swmf_root)
         if payload.get("ok"):
             idl_context.append(payload)
             break

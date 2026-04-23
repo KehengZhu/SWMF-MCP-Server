@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from swmf_mcp_server import server
+from swmf_mcp_server.tools.debug_protocol import collect_invariant_context
 from swmf_mcp_server.core.debug_protocol import (
     FAMILY_SOURCE_CHANGE_VALIDATION,
     STATE_CLASSIFICATION,
@@ -33,12 +33,12 @@ def test_protocol_envelope_contains_version_and_patch_gate() -> None:
 
 
 def test_collect_invariant_context_controls_patch_readiness() -> None:
-    incomplete = server.swmf_collect_invariant_context(data_structure="VertexState")
+    incomplete = collect_invariant_context(data_structure="VertexState")
     assert incomplete["ok"] is True
     assert incomplete["protocol_state"] == STATE_PATCH_READINESS
     assert incomplete["patch_readiness"]["ready"] is False
 
-    complete = server.swmf_collect_invariant_context(
+    complete = collect_invariant_context(
         data_structure="VertexState",
         invariants_before_change=["nVertex_B >= 0"],
         operations_that_can_violate=["offset shift"],

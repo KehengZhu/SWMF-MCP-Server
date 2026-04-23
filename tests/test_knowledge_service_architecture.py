@@ -7,10 +7,11 @@ from pathlib import Path
 def test_public_entrypoints_do_not_import_core_knowledge_service() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     paths = [
-        repo_root / "src" / "swmf_mcp_server" / "tools" / "knowledge.py",
-        repo_root / "src" / "swmf_mcp_server" / "tools" / "param.py",
-        repo_root / "src" / "swmf_mcp_server" / "resources" / "param_schema.py",
-        repo_root / "src" / "swmf_mcp_server" / "resources" / "source_knowledge.py",
+        repo_root / "src" / "swmf_mcp_server" / "tools" / "get_context.py",
+        repo_root / "src" / "swmf_mcp_server" / "tools" / "get_evidence.py",
+        repo_root / "src" / "swmf_mcp_server" / "tools" / "get_workflow_guidance.py",
+        repo_root / "src" / "swmf_mcp_server" / "tools" / "inspect_artifact.py",
+        repo_root / "src" / "swmf_mcp_server" / "tools" / "compare_artifacts.py",
         repo_root / "src" / "swmf_mcp_server" / "server.py",
     ]
 

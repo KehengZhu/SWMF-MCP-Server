@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from swmf_mcp_server import server
+from swmf_mcp_server.tools.debug_protocol import (
+    extract_first_error,
+    collect_param_context,
+)
 
 
 def _make_fake_swmf_root(tmp_path: Path) -> tuple[Path, Path]:
@@ -18,7 +21,7 @@ def _make_fake_swmf_root(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_diagnose_error_has_legacy_fields_plus_protocol_fields() -> None:
-    payload = server.swmf_extract_first_error(log_text="INFO startup\nERROR: failed to initialize module\n")
+    payload = extract_first_error(log_text="INFO startup\nERROR: failed to initialize module\n")
 
     assert payload["ok"] is True
     assert payload["protocol_version"] == "swmf-debug/1.0"
@@ -47,7 +50,7 @@ def test_collect_param_context_has_legacy_fields_plus_protocol_fields(tmp_path: 
         encoding="utf-8",
     )
 
-    payload = server.swmf_collect_param_context(
+    payload = collect_param_context(
         param_path=str(param_path),
         run_dir=str(run_dir),
         nproc=1,

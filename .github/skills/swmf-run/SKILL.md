@@ -1,0 +1,47 @@
+---
+name: swmf-run
+description: "Use when the task is about how to execute a SWMF simulation: launch sequence, run scripts, run environment, job submission, or pre-run checks."
+---
+
+# swmf-run
+
+## When to use
+- "How do I submit this job?"
+- "What scripts do I run before launching?"
+- "How do I set up a restart run?"
+- "What does the run directory need to contain?"
+- "How do I check if the run is ready to start?"
+- Any task about execution procedure and run environment
+
+## Do not use when
+- User wants to configure PARAM → `swmf-configure`
+- User wants to build → `swmf-build`
+- Something failed during a run → `swmf-debug`
+- User wants to interpret outputs → `swmf-analyze`
+
+## Evidence order
+
+1. `get_workflow_guidance(goal=<run goal>, task_type="run")`
+   — launch scripts, restart scripts, pre-run entrypoints
+2. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
+   — run directory layout and readiness check
+3. `get_evidence(mode="keyword", goal="run environment or job script")`
+   — for specific run flags or cluster submission patterns
+4. PARAM validation before launch:
+   ```
+   inspect_artifact(artifact_type="param", path=<PARAM.in>,
+                    question="validate structure and component map")
+   ```
+
+## Helper skills allowed
+
+* `swmf-params` — for PARAM.in validation before run
+* `swmf-exact-lookup` — for specific script flag confirmation
+
+## Outputs
+
+* run entrypoints with `relative_path` and `why_relevant`
+* required inputs and constraints
+* run directory readiness findings when `inspect_artifact` was called
+* DO NOT invent shell commands from heuristic evidence; state affordances only
+* if validation has not been done, say so

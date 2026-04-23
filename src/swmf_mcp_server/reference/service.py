@@ -287,7 +287,7 @@ def _resolve_catalog(
     return get_reference_catalog(root=root, force_refresh=force_refresh)
 
 
-def swmf_list_available_components(
+def list_available_components_for_root(
     swmf_root: str | None = None,
     run_dir: str | None = None,
     force_refresh: bool = False,
@@ -298,7 +298,7 @@ def swmf_list_available_components(
     return list_available_components(catalog)
 
 
-def swmf_find_param_command(
+def find_param_command_for_root(
     name: str,
     swmf_root: str | None = None,
     run_dir: str | None = None,
@@ -310,7 +310,7 @@ def swmf_find_param_command(
     return find_param_command(catalog, name=name)
 
 
-def swmf_get_component_versions(
+def get_component_versions_for_root(
     component: str | None = None,
     swmf_root: str | None = None,
     run_dir: str | None = None,
@@ -322,7 +322,7 @@ def swmf_get_component_versions(
     return get_component_versions(catalog, component=component)
 
 
-def swmf_trace_param_command(
+def trace_param_command_for_root(
     name: str,
     max_examples: int = 20,
     swmf_root: str | None = None,
@@ -335,7 +335,7 @@ def swmf_trace_param_command(
     return trace_param_command(catalog, name=name, max_examples=max_examples)
 
 
-def swmf_find_example_params(
+def find_example_params_for_root(
     query: str,
     max_results: int = 30,
     swmf_root: str | None = None,
@@ -348,7 +348,7 @@ def swmf_find_example_params(
     return find_example_params(catalog, query=query, max_results=max_results)
 
 
-def swmf_list_idl_procedures(
+def list_idl_procedures_for_root(
     category: str | None = None,
     swmf_root: str | None = None,
     run_dir: str | None = None,
@@ -375,7 +375,7 @@ def swmf_list_idl_procedures(
     }
 
 
-def swmf_explain_idl_procedure(
+def explain_idl_procedure_for_root(
     name: str,
     swmf_root: str | None = None,
     run_dir: str | None = None,

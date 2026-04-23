@@ -1,114 +1,94 @@
 ---
 name: swmf-debug
-description: Use for SWMF debugging across PARAM input, build/config, startup, runtime crashes, MPI/coupling layout, numerical anomalies, restart/output issues, and source-change validation.
+description: "Use when something is broken or suspicious: run crash, wrong results, initialization failure, hang/stall, coupling error, build succeeded but behavior is incorrect, or any request that starts from failure evidence."
 ---
 
-# SWMF Debug
+# swmf-debug
 
-## Purpose
-Own the evidence-first debugging protocol for SWMF.
-This skill exists to stop premature patching and force the model to move from
-observations to competing mechanisms to the cheapest discriminating check.
+## When to use
+- Run crashed or aborted
+- Output is wrong or physically implausible
+- Coupling is missing or silent
+- Build succeeded but behavior is incorrect
+- MPI error, rank mismatch, or layout problem
+- Initialization failure in any component
+- Any request where the user says "it failed" or "something went wrong"
 
-## Required State Machine
-Every debugging session must move through these states in order:
-1. `intake`
-2. `classification`
-3. `evidence_collection`
-4. `normalization`
-5. `hypothesis_staging`
-6. `discriminating_experiment`
-7. `patch_readiness`
-8. `validation`
+## Do not use when
+- User only wants conceptual explanation → `swmf-explain`
+- User is configuring a case from scratch (no failure) → `swmf-configure`
+- User wants to understand outputs (no failure) → `swmf-analyze`
 
-Rules:
-- Do not skip states.
-- Do not move into `patch_readiness` without invariant context for source edits.
-- If new evidence breaks an assumption, move back only as far as needed.
+## Evidence order
 
-## Failure Families
-- `input_schema`
-- `build_config`
-- `startup_initialization`
-- `runtime_crash_stop`
-- `hang_stall_performance`
-- `coupling_mpi_layout`
-- `numerical_physics_anomaly`
-- `postprocess_restart_output`
-- `source_change_validation`
+1. **Inspect artifact first** — always start from the failure artifact:
+   ```
+   inspect_artifact(artifact_type="log",     path=<log>)      # crashes, runtime errors
+   inspect_artifact(artifact_type="param",   path=<PARAM.in>) # input failures
+   inspect_artifact(artifact_type="run_dir", path=<run_dir>)  # layout/startup
+   ```
+   Read `findings`. Identify the failure family.
 
-State the failure family before proposing fixes.
+2. **Cross-component orientation** (only if failure spans components):
+   ```
+   get_context(question=<failure summary>, scope=[<components>], task_type="debug")
+   ```
 
-## Mandatory First Output
-Before proposing edits, produce:
-- failure family
-- required context pack checklist
-- missing artifacts list
-- observation report
-- mechanism candidates
-- cheapest discriminating next check
+3. **Source grounding** after failure family is known:
+   ```
+   get_evidence(query=<symbol or error token>, mode="hybrid", goal="root cause of <family>")
+   ```
 
-## Evidence Discipline
-Always separate:
-- `observations`: literal facts from tools, files, plots, logs, or source
-- `mechanism_candidates`: competing explanations with confidence and required checks
+4. **Regression comparison** (when user says "it worked before"):
+   ```
+   compare_artifacts(left=<baseline>, right=<modified>, comparison_type="log"|"param")
+   ```
 
-Never infer mechanism from a plot when raw files or logs disagree.
+## Failure families
 
-## MCP Evidence Map
-- `swmf_collect_param_context`
-- `swmf_resolve_param_includes`
-- `swmf_extract_component_map`
-- `swmf_collect_build_context`
-- `swmf_collect_run_context`
-- `swmf_extract_first_error`
-- `swmf_extract_stacktrace`
-- `swmf_collect_source_context`
-- `swmf_collect_invariant_context`
-- `swmf_compare_run_artifacts`
-- `swmf_validate_param`
-- `swmf_run_testparam`
-- `swmf_search_source`
-- `swmf_get_knowledge_index_status`
-- `swmf_lookup_source_symbol`
+* `input_schema` — PARAM.in invalid or mismatched
+* `build_config` — environment or compile issue
+* `startup_initialization` — component init failure
+* `runtime_crash_stop` — abort, segfault, or stop during run
+* `hang_stall_performance` — no progress, timeout
+* `coupling_mpi_layout` — rank mismatch, missing coupler message
+* `numerical_physics_anomaly` — NaN, overflow, implausible output
+* `postprocess_restart_output` — restart or output format problem
+* `source_change_validation` — regression after a code change
 
-## Patch Guardrails
-Never patch when any of the following is true:
+State the failure family before proposing any fix.
+
+## Required state machine
+
+Every session must move in order: `intake` → `classification` → `evidence_collection`
+→ `normalization` → `hypothesis_staging` → `discriminating_experiment`
+→ `patch_readiness` → `validation`
+
+Do not skip states. Do not move to `patch_readiness` without:
+- failure family classified
+- invariant block for source changes
+- at least one discriminating check proposed
+
+## Patch guardrails
+
+Never patch when:
 - evidence pack is incomplete
-- version/source path mismatch is unresolved
 - invariant block is missing for source changes
 - no discriminating check has been proposed
 
-Stop conditions:
-- plot and raw-file evidence conflict
-- first failing artifact has not been located
-- authoritative validation has not been run where applicable
+## Helper skills allowed
 
-## Invariant Checklist
-For source-level debugging, require:
-- `data_structure`
-- `invariants_before_change`
-- `operations_that_can_violate`
-- `diagnostics_to_collect`
-- `runtime_checks`
+* `swmf-implementation` — for source patch preparation and invariant context
+* `swmf-exact-lookup` — when findings name a specific symbol
+* `swmf-params` — when narrowed to PARAM semantics
 
-Patch readiness can be true only when the invariant block exists and runtime checks can confirm or refute at least one mechanism candidate.
+## Outputs (required)
 
-## Output Contract
-Always include:
-- `protocol_version`
-- `protocol_state`
-- `failure_family`
-- `observation_report`
-- `mechanism_candidates`
-- `unresolved_conflicts`
-- `next_discriminating_checks`
-- `patch_readiness`
-- `invariant_block` for source-change cases
-
-## Collaboration Rules
-- Accept handoffs from any other SWMF skill when a request becomes ambiguous or failure-driven.
-- Hand back to `swmf-param-specialist` once the issue is narrowed to PARAM semantics.
-- Hand back to `swmf-build-run` once the issue is narrowed to reproducible environment/setup steps.
-- Hand back to `swmf-postproc` when the problem is isolated to output inspection or visualization behavior.
-- Hand off to `swmf-implementation` only after patch readiness is satisfied.
+* `protocol_state`
+* `failure_family`
+* `observation_report` (literal facts from artifacts, not interpretations)
+* `mechanism_candidates` (competing explanations with confidence)
+* `unresolved_conflicts`
+* `next_discriminating_check`
+* `patch_readiness` (true/false)
+* `invariant_block` for source-change cases
