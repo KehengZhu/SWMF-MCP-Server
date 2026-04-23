@@ -12,3 +12,5 @@ src/*egg-info
 .swmf_semantic_cache/
 .pytest_cache/
 build/
+SWMF
+SWMFSOLAR
