@@ -778,7 +778,7 @@ class SourceIndexCatalog:
                 file_count=0,
                 last_built_epoch_s=None,
                 is_stale=True,
-                message="Index not yet built. Call swmf_refresh_knowledge_index to build it.",
+                message="Index not yet built. Run the server with --preindex-knowledge or call get_evidence to build it on demand.",
                 corpus_roots=[],
             )
 

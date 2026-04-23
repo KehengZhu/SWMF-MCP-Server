@@ -1,6 +1,6 @@
 # SWMF MCP Public API - v2 Schema
 #
-# Live contract: the server exposes exactly five public MCP tools and no MCP
+# Live contract: the server exposes exactly four public MCP tools and no MCP
 # resources. Parser, catalog, reference, and knowledge modules may exist only
 # as private implementation infrastructure behind these tools.
 
@@ -50,7 +50,7 @@ tools:
     description: >
       Retrieve grounded local evidence for a query. Use this for exact lookup,
       symbol or parameter evidence, source snippets, documentation, examples,
-      and IDL-related evidence.
+      IDL-related evidence, and workflow evidence when task_type is set.
     input_schema:
       query: {type: string, required: true}
       mode:
@@ -61,43 +61,23 @@ tools:
       scope: {type: array[string], required: false, default: []}
       top_k: {type: integer, required: false, default: 8, min: 1, max: 100}
       goal: {type: string, required: false, default: ""}
+      task_type:
+        type: string
+        required: false
+        default: lookup
+        enum: [lookup, configuration, build, run, analysis]
+      module: {type: string, required: false}
       swmf_root: {type: string, required: false}
       run_dir: {type: string, required: false}
     output_schema:
       ok: boolean
       summary: string
+      task_type: string
+      module: string | null
       evidence: array[EvidenceItem]
       provenance:
         mode_used: string
         scope: array[string]
-      uncertainty:
-        known_unknowns: array[string]
-
-  get_workflow_guidance:
-    description: >
-      Return likely workflow entrypoints and usage evidence for configuration,
-      build, run, or analysis goals. This tool does not execute commands.
-    input_schema:
-      goal: {type: string, required: true}
-      module: {type: string, required: false}
-      task_type:
-        type: string
-        required: false
-        default: configuration
-        enum: [configuration, build, run, analysis]
-      context: {type: object, required: false, default: {}}
-      swmf_root: {type: string, required: false}
-      run_dir: {type: string, required: false}
-    output_schema:
-      ok: boolean
-      summary: string
-      entrypoints: array[EntrypointItem]
-      usage_evidence: array[EvidenceItem]
-      required_inputs: array[string]
-      constraints: array[string]
-      evidence: array[EvidenceItem]
-      provenance:
-        backend_used: string
       uncertainty:
         known_unknowns: array[string]
 
@@ -153,7 +133,7 @@ tools:
         known_unknowns: array[string]
 
 public_surface_rules:
-  - The server registers only the five tools listed above.
-  - The tools package exports only the five public tool modules listed above.
+  - The server registers only the four tools listed above.
+  - The tools package exports only the four public tool modules listed above.
   - No MCP resources or resource templates are registered.
   - No legacy MCP-facing tool aliases are supported.

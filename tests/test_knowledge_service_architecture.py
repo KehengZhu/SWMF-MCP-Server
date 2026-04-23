@@ -9,7 +9,6 @@ def test_public_entrypoints_do_not_import_core_knowledge_service() -> None:
     paths = [
         repo_root / "src" / "swmf_mcp_server" / "tools" / "get_context.py",
         repo_root / "src" / "swmf_mcp_server" / "tools" / "get_evidence.py",
-        repo_root / "src" / "swmf_mcp_server" / "tools" / "get_workflow_guidance.py",
         repo_root / "src" / "swmf_mcp_server" / "tools" / "inspect_artifact.py",
         repo_root / "src" / "swmf_mcp_server" / "tools" / "compare_artifacts.py",
         repo_root / "src" / "swmf_mcp_server" / "server.py",

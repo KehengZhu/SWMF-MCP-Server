@@ -38,7 +38,6 @@ def test_server_registers_only_minimal_public_tools() -> None:
         # v2 public API (primary agent-facing surface)
         "get_context",
         "get_evidence",
-        "get_workflow_guidance",
         "inspect_artifact",
         "compare_artifacts",
     }

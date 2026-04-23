@@ -71,10 +71,10 @@ class TestIndexReadiness:
         status = ks.get_index_status(SWMF_ROOT)
         assert status.ok is True, (
             f"Knowledge index not ready. Status: {status}. "
-            "Run 'make preindex' to build the index."
+            "Run 'make' to build the local MCP runtime and knowledge index."
         )
         assert not status.is_stale, (
-            "Knowledge index is stale. Run 'make preindex' to refresh it."
+            "Knowledge index is stale. Run 'make' to refresh the local MCP preparation."
         )
 
     def test_index_has_symbols(self) -> None:
@@ -83,7 +83,7 @@ class TestIndexReadiness:
         symbol_count = status.symbol_count
         assert symbol_count > 0, (
             f"Index reports 0 symbols (symbol_count={symbol_count}). "
-            "Ensure 'make preindex' was run against a populated SWMF tree."
+            "Ensure 'make' was run against a populated SWMF tree."
         )
 
 

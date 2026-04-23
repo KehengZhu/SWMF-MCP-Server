@@ -19,7 +19,7 @@ description: "Use when the task is about compiling, setting up build targets, bu
 
 ## Evidence order
 
-1. `get_workflow_guidance(goal=<build goal>, task_type="build")`
+1. `get_evidence(query=<build goal>, task_type="build", goal=<build goal>)`
    — discovers Config.pl, Makefile targets, and build entrypoints
 2. `inspect_artifact(artifact_type="run_dir"|"build_output", path=...)`
    — for build output inspection or troubleshooting
@@ -33,7 +33,10 @@ description: "Use when the task is about compiling, setting up build targets, bu
 
 ## Outputs
 
-* build entrypoints with `relative_path` and `why_relevant`
-* required inputs and constraints from `get_workflow_guidance`
+* workflow evidence items from `get_evidence(task_type="build")`
+* workflow metadata on returned items:
+  * `metadata.kind`
+  * `metadata.relative_path`
+  * `metadata.why_relevant`
 * build findings when troubleshooting (from `inspect_artifact`)
 * next step clearly stated (what command to run and why)

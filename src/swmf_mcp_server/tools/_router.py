@@ -76,6 +76,7 @@ def _truncate(text: str, max_chars: int = _SNIPPET_MAX) -> str:
 def raw_result_to_evidence_item(record: dict[str, Any]) -> dict[str, Any]:
     """Convert a raw search/symbol record to the canonical EvidenceItem shape."""
     path_str = record.get("file_path", "")
+    name = record.get("name", "")
     # Prefer chunk_text, then docstring, then excerpt
     snippet_raw = (
         record.get("chunk_text")
@@ -83,6 +84,9 @@ def raw_result_to_evidence_item(record: dict[str, Any]) -> dict[str, Any]:
         or record.get("excerpt")
         or ""
     )
+    snippet_text = snippet_raw.strip()
+    if name and snippet_text and not any(char.isalnum() for char in snippet_text):
+        snippet_raw = f"{name}\n{snippet_raw}"
     score_raw = record.get("score")
     score: float | None = float(score_raw) if score_raw is not None else None
 

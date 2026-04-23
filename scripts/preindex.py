@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pre-index the SWMF and SWMFSOLAR knowledge bases.
 
-Called by ``make preindex``.  Reads paths from environment variables set
-by the Makefile:
+Called by ``make`` as part of local MCP preparation. Reads paths from
+environment variables set by the Makefile:
   SWMF_ROOT       – required; path to SWMF source tree
   SWMFSOLAR_ROOT  – optional; path to SWMFSOLAR source tree
 """

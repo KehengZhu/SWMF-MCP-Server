@@ -32,7 +32,7 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
    ```
 3. For configuration scripts or `Config.pl` discovery:
    ```
-   get_workflow_guidance(goal=<config goal>, module=<component>, task_type="configuration")
+   get_evidence(query=<config goal>, goal=<config goal>, module=<component>, task_type="configuration")
    ```
 4. For runtime schema vs source divergence:
    ```
@@ -49,6 +49,10 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
 
 * PARAM command meaning cited from `PARAM.XML` or evidence
 * structural validation findings (if a PARAM.in was provided)
-* configuration script entrypoints with `relative_path` and `why_relevant`
+* configuration workflow evidence from `get_evidence(task_type="configuration")`
+* workflow metadata on returned items:
+  * `metadata.kind`
+  * `metadata.relative_path`
+  * `metadata.why_relevant`
 * verified claims vs unverified claims separated
 * any conflicts between schema and source behavior named explicitly

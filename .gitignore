@@ -3,7 +3,12 @@ __pycache__
 src/*egg-info
 .venv
 .vscode
+.ai
+.claude
+.codex
+.agents
 .DS_Store
 .swmf_mcp_cache/
 .swmf_semantic_cache/
 .pytest_cache/
+build/

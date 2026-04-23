@@ -21,7 +21,7 @@ description: "Use when the task is about how to execute a SWMF simulation: launc
 
 ## Evidence order
 
-1. `get_workflow_guidance(goal=<run goal>, task_type="run")`
+1. `get_evidence(query=<run goal>, task_type="run", goal=<run goal>)`
    — launch scripts, restart scripts, pre-run entrypoints
 2. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
    — run directory layout and readiness check
@@ -40,8 +40,11 @@ description: "Use when the task is about how to execute a SWMF simulation: launc
 
 ## Outputs
 
-* run entrypoints with `relative_path` and `why_relevant`
-* required inputs and constraints
+* workflow evidence items from `get_evidence(task_type="run")`
+* workflow metadata on returned items:
+  * `metadata.kind`
+  * `metadata.relative_path`
+  * `metadata.why_relevant`
 * run directory readiness findings when `inspect_artifact` was called
 * DO NOT invent shell commands from heuristic evidence; state affordances only
 * if validation has not been done, say so

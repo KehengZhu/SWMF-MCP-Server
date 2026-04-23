@@ -18,18 +18,12 @@ except Exception:  # pragma: no cover - fallback for environments without mcp in
 
             return _decorator
 
-        def resource(self, *_args: Any, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-            def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-                return func
-
-            return _decorator
-
         def run(self, *_args: Any, **_kwargs: Any) -> None:
             raise RuntimeError("mcp package is required to run the MCP server.")
 
 from .core.swmf_root import resolve_swmf_root
 from .knowledge import service as ks
-from .tools import get_context, get_evidence, get_workflow_guidance, inspect_artifact, compare_artifacts
+from .tools import get_context, get_evidence, inspect_artifact, compare_artifacts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +37,6 @@ app = FastMCP("swmf-prototype", json_response=True)
 # Phase 3 v2 public API tools (primary agent-facing surface).
 get_context.register(app)
 get_evidence.register(app)
-get_workflow_guidance.register(app)
 inspect_artifact.register(app)
 compare_artifacts.register(app)
 

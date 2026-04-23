@@ -7,7 +7,6 @@ def test_tools_package_exports_only_active_public_modules() -> None:
     assert tools.__all__ == [
         "get_context",
         "get_evidence",
-        "get_workflow_guidance",
         "inspect_artifact",
         "compare_artifacts",
     ]

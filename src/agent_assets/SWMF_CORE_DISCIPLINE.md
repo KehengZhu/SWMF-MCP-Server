@@ -26,28 +26,27 @@ An entry skill consults them to fill specific gaps.
 
 ## V2 MCP tool surface
 
-These five tools are the only agent-facing retrieval interface. All backends
+These four tools are the only agent-facing retrieval interface. All backends
 (catalog, semantic index, param parser, log extractor, script scanner) are
 hidden inside them.
 
 | Tool | Use for |
 |---|---|
 | `get_context` | Broad orientation, architecture, cross-component questions |
-| `get_evidence` | Symbol/param/file lookup, code grounding, evidence gathering |
-| `get_workflow_guidance` | Entrypoint and script discovery, build/run/config workflows |
+| `get_evidence` | Symbol/param/file lookup, code grounding, workflow evidence, evidence gathering |
 | `inspect_artifact` | Deep inspection of a log, PARAM.in, XML, or run directory |
 | `compare_artifacts` | Diff two PARAM files, logs, run outputs, or directories |
 
 Default tool per task type:
 
 * **explain** → `get_context` first, then `get_evidence`
-* **configure** → `get_evidence(mode="keyword")` for PARAM meaning; `get_workflow_guidance` for scripts
-* **build / run** → `get_workflow_guidance` first
+* **configure** → `get_evidence(mode="keyword")` for PARAM meaning; `get_evidence(task_type="configuration")` for scripts
+* **build / run** → `get_evidence(task_type="build"|"run")` first
 * **debug** → `inspect_artifact` first
-* **analyze** → `inspect_artifact` first, then `get_evidence`
+* **analyze** → `inspect_artifact` first, then `get_evidence(task_type="analysis")` when postprocessing entrypoints are needed
 * **compare** → `compare_artifacts` first
 
-Legacy helper tools are not part of the public MCP surface. Use the five v2
+Legacy helper tools are not part of the public MCP surface. Use the four v2
 tools above for all agent-facing retrieval and artifact inspection.
 
 ---

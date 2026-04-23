@@ -1,7 +1,7 @@
 """Phase 1 API surface tests.
 
 Validates:
-1. All five public API tools are importable and callable.
+1. All four public API tools are importable and callable.
 2. Each tool returns the required output contract fields.
 3. Input validation (task_type/detail/mode/artifact_type normalization).
 4. Legacy swmf_* callables and schema mappings are absent.
@@ -146,50 +146,82 @@ class TestGetEvidence:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tool 3: get_workflow_guidance
+# Tool 3: get_evidence workflow modes
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestGetWorkflowGuidance:
-    def _call(self, **kwargs: Any) -> dict[str, Any]:
-        mod = _import_tool("get_workflow_guidance")
-        kwargs.setdefault("swmf_root", str(Path(__file__).parents[1]))
-        return mod.get_workflow_guidance(**kwargs)
 
-    def test_importable(self) -> None:
-        mod = _import_tool("get_workflow_guidance")
-        assert hasattr(mod, "get_workflow_guidance")
-        assert hasattr(mod, "register")
+class TestGetEvidenceWorkflowModes:
+    def _call(self, **kwargs: Any) -> dict[str, Any]:
+        mod = _import_tool("get_evidence")
+        kwargs.setdefault("swmf_root", str(Path(__file__).parents[1]))
+        return mod.get_evidence(**kwargs)
 
     def test_signature_has_required_params(self) -> None:
-        mod = _import_tool("get_workflow_guidance")
-        sig = inspect.signature(mod.get_workflow_guidance)
-        for param in ("goal", "module", "task_type", "context", "swmf_root", "run_dir"):
+        mod = _import_tool("get_evidence")
+        sig = inspect.signature(mod.get_evidence)
+        for param in (
+            "query",
+            "mode",
+            "scope",
+            "top_k",
+            "goal",
+            "task_type",
+            "module",
+            "swmf_root",
+            "run_dir",
+        ):
             assert param in sig.parameters
 
-    def test_output_contract(self) -> None:
-        result = self._call(goal="configure GM", module="GM")
-        _assert_base_output_contract(result, "get_workflow_guidance")
-        for field in ("entrypoints", "usage_evidence", "required_inputs", "constraints"):
-            assert field in result, f"get_workflow_guidance: missing '{field}'"
-        assert isinstance(result["entrypoints"], list)
-        assert isinstance(result["usage_evidence"], list)
-
-    def test_invalid_task_type_defaults(self) -> None:
-        result = self._call(goal="test", task_type="not_valid")
-        assert result["task_type"] == "configuration"
+    def test_invalid_task_type_defaults_to_lookup(self) -> None:
+        result = self._call(query="test", task_type="not_valid")
+        assert result["task_type"] == "lookup"
 
     def test_valid_task_types(self) -> None:
-        for tt in ("configuration", "build", "run", "analysis"):
-            result = self._call(goal="test", task_type=tt)
+        for tt in ("lookup", "configuration", "build", "run", "analysis"):
+            result = self._call(query="test", task_type=tt)
             assert result["task_type"] == tt
 
     def test_module_normalized_to_uppercase(self) -> None:
-        result = self._call(goal="test", module="gm")
+        result = self._call(query="test", module="gm")
         assert result["module"] == "GM"
 
-    def test_context_defaults_to_empty_dict(self) -> None:
-        result = self._call(goal="test")
-        assert result["context"] == {}
+    def test_lookup_mode_keeps_base_contract(self) -> None:
+        result = self._call(query="DoCoupleGMIE", scope=["GM", "IE"])
+        _assert_base_output_contract(result, "get_evidence")
+        assert "mode" in result
+        assert "mode_used" in result["provenance"]
+        assert "scope" in result["provenance"]
+        assert result["task_type"] == "lookup"
+        assert result["module"] is None
+
+    def test_workflow_modes_return_metadata_without_legacy_fields(self, tmp_path: Path) -> None:
+        swmf_root = tmp_path / "SWMF"
+        gm_dir = swmf_root / "GM"
+        scripts_dir = gm_dir / "Scripts"
+        scripts_dir.mkdir(parents=True)
+        for rel_path in ("Config.pl", "Makefile", "PostProc.pl", "Scripts/TestParam.pl"):
+            target = gm_dir / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+
+        result = self._call(
+            query="configure GM",
+            goal="configure GM",
+            task_type="configuration",
+            module="gm",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "get_evidence")
+        assert result["task_type"] == "configuration"
+        assert result["module"] == "GM"
+        for field in ("entrypoints", "usage_evidence", "required_inputs", "constraints"):
+            assert field not in result
+        assert any("metadata" in item for item in result["evidence"])
+        assert any(
+            item.get("metadata", {}).get("relative_path", "").endswith("Config.pl")
+            for item in result["evidence"]
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +270,7 @@ class TestInspectArtifact:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tool 5: compare_artifacts
+# Tool 4: compare_artifacts
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCompareArtifacts:
@@ -316,8 +348,7 @@ def test_schema_document_exists() -> None:
     schema_path = Path(__file__).parents[1] / "docs" / "api_v2_schema.yaml"
     assert schema_path.is_file(), "docs/api_v2_schema.yaml must exist"
     content = schema_path.read_text(encoding="utf-8")
-    for tool_name in ("get_context", "get_evidence", "get_workflow_guidance",
-                      "inspect_artifact", "compare_artifacts"):
+    for tool_name in ("get_context", "get_evidence", "inspect_artifact", "compare_artifacts"):
         assert tool_name in content, f"Schema document missing entry for '{tool_name}'"
     assert "existing_tool_mapping" not in content
     assert "admin_tools" not in content
@@ -342,11 +373,10 @@ def test_no_legacy_swmf_functions_remain_in_tools() -> None:
     )
 
 
-def test_five_new_tool_modules_exist() -> None:
+def test_four_public_tool_modules_exist() -> None:
     for mod_name in (
         "get_context",
         "get_evidence",
-        "get_workflow_guidance",
         "inspect_artifact",
         "compare_artifacts",
     ):

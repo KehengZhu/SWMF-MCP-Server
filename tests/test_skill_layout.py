@@ -8,11 +8,11 @@ def _repo_root() -> Path:
 
 
 def _skills_root() -> Path:
-    return _repo_root() / ".github" / "skills"
+    return _repo_root() / "src" / "agent_assets" / "skills"
 
 
 def _core_playbook_path() -> Path:
-    return _repo_root() / ".github" / "SWMF_CORE_DISCIPLINE.md"
+    return _repo_root() / "src" / "agent_assets" / "SWMF_CORE_DISCIPLINE.md"
 
 
 _ENTRY_SKILLS = [

@@ -1,6 +1,6 @@
 ---
 name: swmf-analyze
-description: "Use when the user wants to interpret SWMF outputs: what results mean, diagnostics from output files, field interpretation, or postprocessing workflow guidance."
+description: "Use when the user wants to interpret SWMF outputs: what results mean, diagnostics from output files, field interpretation, or postprocessing discovery."
 ---
 
 # swmf-analyze
@@ -25,7 +25,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
    — output file inventory and layout
 2. `get_evidence(mode="keyword", goal="output format or field definition")`
    — field semantics, output variable definitions
-3. `get_workflow_guidance(goal="postprocessing", task_type="analysis")`
+3. `get_evidence(query="postprocessing", task_type="analysis", goal="postprocessing")`
    — postprocessing scripts and entrypoints
 
 ## Helper skills allowed
@@ -37,6 +37,10 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 
 * what output artifacts were found (from `inspect_artifact`)
 * field/variable definitions cited from evidence
-* postprocessing entrypoints with `relative_path`
+* postprocessing workflow evidence from `get_evidence(task_type="analysis")`
+* workflow metadata on returned items:
+  * `metadata.kind`
+  * `metadata.relative_path`
+  * `metadata.why_relevant`
 * what is certain vs uncertain about the interpretation
 * for IDL: load `swmf-postproc/IDL_VISUALIZATION.md` for full protocol

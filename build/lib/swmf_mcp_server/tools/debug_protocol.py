@@ -33,10 +33,72 @@ from ..core.debug_protocol import (
 from ..core.errors import not_found_error_payload
 from ..parsing.component_map import COMPONENTMAP_ROW, expand_component_map_rows
 from ..parsing.external_refs import extract_external_references_from_param_text
-from ..parsing.job_layout import find_likely_job_scripts
+from ..parsing.job_layout import find_likely_job_scripts, infer_job_layout_from_script
 from ..parsing.param_parser import parse_param_text
 from ._helpers import resolve_root_or_failure, with_root
-from .build_run import infer_job_layout
+
+
+def infer_job_layout(job_script_path: str | None = None, run_dir: str | None = None) -> dict[str, Any]:
+    resolved_run_dir = resolve_run_dir(run_dir)
+
+    if job_script_path:
+        script_path = Path(job_script_path).expanduser()
+        if not script_path.is_absolute():
+            script_path = resolved_run_dir / script_path
+        script_path = script_path.resolve()
+        if not script_path.is_file():
+            path_guidance = build_path_search_guidance(
+                path_role="job_script_path",
+                search_roots=[resolved_run_dir, script_path.parent, resolved_run_dir.parent],
+                expected_entries=[script_path.name, "job.long", "job.slurm", "job.pbs", "job.frontera"],
+                keyword_hints=[script_path.name, script_path.stem, "job", "scheduler"],
+            )
+            return {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "JOB_SCRIPT_NOT_FOUND",
+                "message": f"Job script does not exist: {script_path}",
+                **path_guidance,
+            }
+    else:
+        candidates = find_likely_job_scripts(resolved_run_dir)
+        if not candidates:
+            path_guidance = build_path_search_guidance(
+                path_role="run_dir for job script discovery",
+                search_roots=[resolved_run_dir, resolved_run_dir.parent],
+                expected_entries=["job.long", "job.slurm", "job.pbs", "job.frontera", "job"],
+                keyword_hints=[resolved_run_dir.name, "job", "scheduler", "submit"],
+            )
+            return {
+                "ok": False,
+                "hard_error": True,
+                "error_code": "JOB_SCRIPT_NOT_FOUND",
+                "message": f"No likely job script found under run_dir: {resolved_run_dir}",
+                **path_guidance,
+            }
+        script_path = candidates[0]
+
+    try:
+        script_text = script_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        return {
+            "ok": False,
+            "hard_error": True,
+            "error_code": "JOB_SCRIPT_READ_FAILED",
+            "message": f"Could not read job script: {exc}",
+        }
+
+    payload = infer_job_layout_from_script(script_path=script_path, script_text=script_text)
+    payload.update(
+        {
+            "ok": True,
+            "run_dir_resolved": str(resolved_run_dir),
+            "authority": "derived",
+            "source_kind": "script",
+            "source_paths": [str(script_path)],
+        }
+    )
+    return payload
 
 
 _ERROR_PATTERNS = [
@@ -170,7 +232,7 @@ def _stable_file_hash(path: Path, max_bytes: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-def swmf_collect_param_context(
+def collect_param_context(
     param_text: str | None = None,
     param_path: str | None = None,
     run_dir: str | None = None,
@@ -253,7 +315,7 @@ def swmf_collect_param_context(
 
     next_checks = [
         "Resolve include and external reference paths before mechanism inference.",
-        "Run authoritative validation with swmf_run_testparam after input context is complete.",
+        "Use inspect_artifact on the PARAM file and gather supporting evidence before validation.",
     ]
 
     return _merge_protocol(
@@ -279,10 +341,8 @@ def swmf_collect_param_context(
             "ambiguous_references": sorted(set(ambiguous)),
             "recommended_next_tools": _dedupe_keep_order(
                 [
-                    "swmf_resolve_param_includes",
-                    "swmf_extract_component_map",
-                    "swmf_validate_external_inputs",
-                    "swmf_run_testparam",
+                    "inspect_artifact",
+                    "get_evidence",
                 ]
             ),
         },
@@ -296,7 +356,7 @@ def swmf_collect_param_context(
     )
 
 
-def swmf_resolve_param_includes(
+def resolve_param_includes(
     param_text: str | None = None,
     param_path: str | None = None,
     run_dir: str | None = None,
@@ -351,7 +411,7 @@ def swmf_resolve_param_includes(
         "include_count": len(include_refs),
         "resolved_includes": resolved_includes,
         "missing_include_paths": sorted(set(missing)),
-        "recommended_next_tools": ["swmf_collect_param_context", "swmf_run_testparam"],
+            "recommended_next_tools": ["inspect_artifact", "get_evidence"],
     }
 
     if missing:
@@ -378,7 +438,7 @@ def swmf_resolve_param_includes(
     )
 
 
-def swmf_extract_component_map(
+def extract_component_map(
     component_map_text: str | None = None,
     param_text: str | None = None,
     param_path: str | None = None,
@@ -480,7 +540,7 @@ def swmf_extract_component_map(
             "components": components,
             "parse_errors": parse_errors,
             "validation": map_validation,
-            "recommended_next_tools": ["swmf_collect_run_context", "swmf_collect_build_context"],
+            "recommended_next_tools": ["inspect_artifact", "get_workflow_guidance"],
         },
         protocol_envelope(
             state=STATE_NORMALIZATION,
@@ -493,7 +553,7 @@ def swmf_extract_component_map(
     )
 
 
-def swmf_collect_build_context(
+def collect_build_context(
     swmf_root: str | None = None,
     run_dir: str | None = None,
     job_script_path: str | None = None,
@@ -568,9 +628,8 @@ def swmf_collect_build_context(
             "MPICC": None,
         },
         "recommended_next_tools": [
-            "swmf_collect_run_context",
-            "swmf_extract_component_map",
-            "swmf_run_testparam",
+            "inspect_artifact",
+            "get_workflow_guidance",
         ],
     }
 
@@ -590,7 +649,7 @@ def swmf_collect_build_context(
     )
 
 
-def swmf_collect_run_context(
+def collect_run_context(
     run_dir: str,
     log_path: str | None = None,
     job_script_path: str | None = None,
@@ -676,9 +735,8 @@ def swmf_collect_run_context(
         "job_layout": job_layout,
         "first_error": first_error_payload,
         "recommended_next_tools": [
-            "swmf_extract_first_error",
-            "swmf_extract_stacktrace",
-            "swmf_compare_run_artifacts",
+            "inspect_artifact",
+            "compare_artifacts",
         ],
     }
 
@@ -697,7 +755,7 @@ def swmf_collect_run_context(
     )
 
 
-def swmf_extract_first_error(
+def extract_first_error(
     log_text: str | None = None,
     log_path: str | None = None,
     run_dir: str | None = None,
@@ -754,7 +812,7 @@ def swmf_extract_first_error(
             "source_kind": "diagnostic_pipeline",
             "source_paths": source_paths,
             "first_error": evidence,
-            "recommended_next_tools": ["swmf_extract_stacktrace", "swmf_collect_run_context"],
+            "recommended_next_tools": ["inspect_artifact"],
         },
         protocol_envelope(
             state=STATE_NORMALIZATION,
@@ -766,7 +824,7 @@ def swmf_extract_first_error(
     )
 
 
-def swmf_extract_stacktrace(
+def extract_stacktrace(
     log_text: str | None = None,
     log_path: str | None = None,
     run_dir: str | None = None,
@@ -825,7 +883,7 @@ def swmf_extract_stacktrace(
             "source_paths": source_paths,
             "stacktrace_lines": stacktrace_lines,
             "stacktrace_found": len(stacktrace_lines) > 0,
-            "recommended_next_tools": ["swmf_extract_first_error", "swmf_collect_run_context"],
+            "recommended_next_tools": ["inspect_artifact"],
         },
         protocol_envelope(
             state=STATE_NORMALIZATION,
@@ -837,7 +895,7 @@ def swmf_extract_stacktrace(
     )
 
 
-def swmf_collect_source_context(
+def collect_source_context(
     source_path: str,
     symbol_hint: str | None = None,
     line_number: int | None = None,
@@ -900,8 +958,8 @@ def swmf_collect_source_context(
             "center_line": center,
             "excerpt": excerpt,
             "recommended_next_tools": [
-                "swmf_collect_invariant_context",
-                "swmf_extract_first_error",
+                "inspect_artifact",
+                "get_evidence",
             ],
         },
         protocol_envelope(
@@ -919,7 +977,7 @@ def swmf_collect_source_context(
     )
 
 
-def swmf_collect_invariant_context(
+def collect_invariant_context(
     data_structure: str,
     invariants_before_change: list[str] | None = None,
     operations_that_can_violate: list[str] | None = None,
@@ -949,7 +1007,7 @@ def swmf_collect_invariant_context(
             "source_kind": "diagnostic_pipeline",
             "source_paths": [],
             "invariant_block": invariant_block.as_payload(),
-            "recommended_next_tools": ["swmf_collect_source_context", "swmf_collect_run_context"],
+            "recommended_next_tools": ["get_evidence", "inspect_artifact"],
         },
         protocol_envelope(
             state=STATE_PATCH_READINESS,
@@ -964,7 +1022,7 @@ def swmf_collect_invariant_context(
     )
 
 
-def swmf_compare_run_artifacts(
+def compare_run_artifacts(
     reference_path: str,
     candidate_path: str,
     run_dir: str | None = None,
@@ -1030,7 +1088,7 @@ def swmf_compare_run_artifacts(
             "candidate_only": only_right,
             "common_file_count": len(left & right),
             "changed": bool(only_left or only_right),
-            "recommended_next_tools": ["swmf_collect_run_context"],
+            "recommended_next_tools": ["inspect_artifact"],
         }
     else:
         if reference.is_dir() != candidate.is_dir():
@@ -1075,7 +1133,7 @@ def swmf_compare_run_artifacts(
             "candidate_hash": _stable_file_hash(candidate),
             "diff_line_count": len(diff_lines),
             "diff_sample": diff_lines[:max_diff_lines],
-            "recommended_next_tools": ["swmf_extract_first_error", "swmf_collect_run_context"],
+            "recommended_next_tools": ["inspect_artifact"],
         }
 
     return _merge_protocol(
@@ -1091,16 +1149,3 @@ def swmf_compare_run_artifacts(
             patch_ready=False,
         ),
     )
-
-
-def register(app: Any) -> None:
-    app.tool(description="Collect structured PARAM input context pack for SWMF debugging.")(swmf_collect_param_context)
-    app.tool(description="Resolve and verify #INCLUDE file references from PARAM input.")(swmf_resolve_param_includes)
-    app.tool(description="Extract and validate #COMPONENTMAP rows from text or PARAM input.")(swmf_extract_component_map)
-    app.tool(description="Collect SWMF build/config evidence context from root, catalog, and optional job script.")(swmf_collect_build_context)
-    app.tool(description="Collect run-directory runtime context including artifacts, inferred layout, and first-error hints.")(swmf_collect_run_context)
-    app.tool(description="Extract first failing log line with local context window.")(swmf_extract_first_error)
-    app.tool(description="Extract stacktrace/backtrace-style evidence from log input.")(swmf_extract_stacktrace)
-    app.tool(description="Collect focused source file context around symbol or line for debugging evidence.")(swmf_collect_source_context)
-    app.tool(description="Capture invariant checklist context before any source-level patching.")(swmf_collect_invariant_context)
-    app.tool(description="Compare run artifacts (files/directories) to support validation and regression checks.")(swmf_compare_run_artifacts)

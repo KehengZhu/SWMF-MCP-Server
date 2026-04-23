@@ -540,7 +540,7 @@ def extract_component_map(
             "components": components,
             "parse_errors": parse_errors,
             "validation": map_validation,
-            "recommended_next_tools": ["inspect_artifact", "get_workflow_guidance"],
+            "recommended_next_tools": ["inspect_artifact", "get_evidence"],
         },
         protocol_envelope(
             state=STATE_NORMALIZATION,
@@ -629,7 +629,7 @@ def collect_build_context(
         },
         "recommended_next_tools": [
             "inspect_artifact",
-            "get_workflow_guidance",
+            "get_evidence",
         ],
     }
 
