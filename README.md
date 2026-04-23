@@ -65,9 +65,7 @@ Bootstrap the local runtime:
 make
 ```
 
-`make` installs `uv` if needed, reuses a valid `.venv` when possible, creates or
-syncs the environment when needed, warms the embedding cache, and builds the
-knowledge index used by the MCP server.
+`make` installs `uv` if needed, reuses a valid `.venv` when possible, creates or syncs the environment when needed, warms the embedding cache, and builds the knowledge index used by the MCP server.
 
 Install one agent bundle:
 
@@ -78,21 +76,9 @@ make install AGENT=copilot-cli SWMF_ROOT=/data/SWMF
 make install AGENT=codex SWMF_ROOT=/data/SWMF SWMF_IDL_EXEC=/path/to/idl
 ```
 
-`make install` writes one agent-specific config file, symlinks the matching
-instruction file to the shared discipline source, and symlinks the agent skill
-tree to `src/agent_assets/skills`.
+`make install` writes one agent-specific config file, symlinks the matching instruction file to the shared discipline source, and symlinks the agent skill tree to `src/agent_assets/skills`.
 
-For GitHub Copilot CLI, the install is repository-local:
-
-- MCP config: `.mcp.json`
-- Instructions: `.github/copilot-instructions.md`
-- Skills: `.github/skills`
-
-Run the server:
-
-```bash
-python -m swmf_mcp_server.server
-```
+When the agent is launched in your project directory, it should be able to load MCP tools and skills automatically.
 
 Example user prompts:
 
