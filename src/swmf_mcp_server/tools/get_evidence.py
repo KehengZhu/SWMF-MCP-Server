@@ -81,17 +81,102 @@ run_dir   : Optional run directory used for root resolution.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from ._helpers import resolve_root_or_failure, with_root
 from ._router import run_evidence_search
 from ._workflow import discover_workflow_entrypoints
+from ..reference import explain_idl_procedure_for_root, list_idl_procedures_for_root
 
 _VALID_MODES = frozenset({"hybrid", "keyword", "semantic"})
 _VALID_TASK_TYPES = frozenset({"lookup", "configuration", "build", "run", "analysis"})
 _DEFAULT_TOP_K = 8
 _MAX_TOP_K = 100
+_IDL_TOKEN_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9_]*\b")
+_IDL_KNOWN_NAMES = frozenset({
+    "animate_data",
+    "plot_data",
+    "plot_func",
+    "plot_log",
+    "plot_log_data",
+    "read_data",
+    "read_log_data",
+    "show_data",
+    "show_log_data",
+})
+_IDL_GENERIC_TOKENS = frozenset({
+    "all",
+    "and",
+    "category",
+    "data",
+    "detail",
+    "entry",
+    "entrypoint",
+    "entrypoints",
+    "for",
+    "function",
+    "functions",
+    "guidance",
+    "how",
+    "idl",
+    "list",
+    "macro",
+    "macros",
+    "mode",
+    "plot",
+    "plotting",
+    "procedure",
+    "procedures",
+    "read",
+    "signature",
+    "signatures",
+    "usage",
+    "use",
+    "visualization",
+    "which",
+})
+_IDL_MANUAL_TOPICS: dict[str, tuple[int, int, str]] = {
+    "setup": (72, 118, "IDL setup, IDL_PATH, IDL_STARTUP, idlrc, retall"),
+    "startup": (72, 118, "IDL setup, IDL_PATH, IDL_STARTUP, idlrc, retall"),
+    "read_data": (120, 170, "read_data snapshot header and arrays"),
+    "show_data": (360, 395, "show_data quick read-and-plot workflow"),
+    "plot_data": (360, 418, "plot_data function and plotmode prompts"),
+    "func": (422, 455, "func strings, variables, funcdef names, expressions, vector pairs"),
+    "funcdef": (958, 1005, "funcdef.pro function definition rules"),
+    "plotmode": (456, 585, "plotmode strings for 1D, scalar 2D, vector, overplot, modifiers"),
+    "transform": (170, 276, "regular, polar, unpolar, sphere, and custom transforms"),
+    "slice": (930, 958, "slice_data and slice_data_restore for structured 3D data"),
+    "slicing": (930, 958, "slice_data and slice_data_restore for structured 3D data"),
+    "cut": (586, 744, "domain selection with ranges, cut, grid, triplet, quadruplet, velpos, rcut"),
+    "domain": (586, 744, "domain selection with ranges, cut, grid, triplet, quadruplet, velpos, rcut"),
+    "log": (1046, 1134, "read_log_data and plot_log_data log workflows"),
+    "logs": (1046, 1134, "read_log_data and plot_log_data log workflows"),
+    "read_log_data": (1046, 1098, "read_log_data log arrays and names"),
+    "plot_log_data": (1099, 1134, "plot_log_data and show_log_data"),
+    "show_log_data": (1099, 1134, "plot_log_data and show_log_data"),
+    "animate_data": (788, 930, "animate_data multi-frame, comparison, movie storage"),
+    "animation": (788, 930, "animate_data multi-frame, comparison, movie storage"),
+    "compare": (780, 856, "multi-file plotting and comparison"),
+    "comparison": (780, 856, "multi-file plotting and comparison"),
+    "export": (1198, 1250, "PostScript, PDF, frame, and video export"),
+    "save": (1198, 1250, "PostScript, PDF, frame, and video export"),
+    "script": (1248, 1295, "IDL script and procedure reuse"),
+    "scripts": (1248, 1295, "IDL script and procedure reuse"),
+}
+_IDL_ENTRYPOINT_PRIORITY = [
+    "read_data",
+    "show_data",
+    "plot_data",
+    "animate_data",
+    "read_log_data",
+    "plot_log_data",
+    "show_log_data",
+    "slice_data",
+    "slice_data_restore",
+    "plot_func",
+]
 
 
 def _normalize_task_type(task_type: str | None) -> str:
@@ -112,6 +197,17 @@ def _append_unique_scope(scope: list[str], module: str | None) -> list[str]:
     return resolved
 
 
+def _truncate(text: str, max_chars: int = 300) -> str:
+    stripped = text.strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[:max_chars] + "..."
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def _relative_path(root: Path, candidate_path: str) -> str:
     candidate = Path(candidate_path)
     try:
@@ -120,6 +216,276 @@ def _relative_path(root: Path, candidate_path: str) -> str:
         return str(candidate)
     except Exception:
         return str(candidate)
+
+
+def _looks_like_idl_request(query: str, goal: str) -> bool:
+    text = f"{query} {goal}".lower()
+    if "idl" in text or ".pro" in text:
+        return True
+    if any(name in text for name in _IDL_KNOWN_NAMES):
+        return True
+    if any(topic in text for topic in ("funcdef", "plotmode", "slice_data", "savemovie")):
+        return True
+    return "procedure" in text and any(term in text for term in ("plot", "read", "show", "animate"))
+
+
+def _idl_list_intent(query: str, goal: str) -> bool:
+    text = f"{query} {goal}".lower()
+    return any(term in text for term in ("list", "which", "inventory", "entrypoint", "entry point", "all"))
+
+
+def _infer_idl_category(query: str, goal: str) -> str | None:
+    text = f"{query} {goal}".lower()
+    if any(term in text for term in ("magnetogram", "fits")):
+        return "magnetogram"
+    if any(term in text for term in ("animate", "animation", "movie")):
+        return "animation"
+    if any(term in text for term in ("read", "logfile", "log file", "snapshot")) and "plot" not in text:
+        return "data_reading"
+    if any(term in text for term in ("plot", "show", "visual", "contour", "stream", "vector")):
+        return "plotting"
+    return None
+
+
+def _idl_name_candidates(query: str, goal: str) -> list[str]:
+    text = f"{query} {goal}"
+    candidates: list[str] = []
+    for token in _IDL_TOKEN_RE.findall(text):
+        lowered = token.lower()
+        if lowered in _IDL_KNOWN_NAMES or ("_" in lowered and lowered not in _IDL_GENERIC_TOKENS):
+            candidates.append(lowered)
+    return list(dict.fromkeys(candidates))
+
+
+def _manual_topic_candidates(query: str, goal: str) -> list[str]:
+    text = f"{query} {goal}".lower()
+    candidates: list[str] = []
+    for topic in _IDL_MANUAL_TOPICS:
+        if re.search(rf"(?<![a-z0-9_]){re.escape(topic)}(?![a-z0-9_])", text):
+            candidates.append(topic)
+    if "plot mode" in text and "plotmode" not in candidates:
+        candidates.append("plotmode")
+    if "function string" in text and "func" not in candidates:
+        candidates.append("func")
+    return list(dict.fromkeys(candidates))
+
+
+def _read_doc_lines(path: Path, start_line: int, end_line: int) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    start = max(1, start_line)
+    end = min(len(lines), end_line)
+    return "\n".join(lines[start - 1:end])
+
+
+def _manual_topic_to_evidence(root: Path, topic: str) -> dict[str, Any] | None:
+    doc_path = _repo_root() / "docs" / "idl.md"
+    if topic not in _IDL_MANUAL_TOPICS or not doc_path.is_file():
+        return None
+    start_line, end_line, why = _IDL_MANUAL_TOPICS[topic]
+    snippet = _truncate(_read_doc_lines(doc_path, start_line, end_line), max_chars=900)
+    if not snippet:
+        return None
+    return {
+        "type": "idl",
+        "path": str(doc_path),
+        "snippet": snippet,
+        "score": 1.0,
+        "name": topic,
+        "kind": "manual_section",
+        "start_line": start_line,
+        "metadata": {
+            "kind": "idl_manual_section",
+            "relative_path": _relative_path(root, str(doc_path)),
+            "why_relevant": why,
+            "topic": topic,
+            "line_start": start_line,
+            "line_end": end_line,
+        },
+    }
+
+
+def _parse_funcdef_entries(funcdef_path: Path, limit: int = 40) -> list[dict[str, str]]:
+    try:
+        text = funcdef_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    entries: list[dict[str, str]] = []
+    for match in re.finditer(r"\[\s*'([^']+)'\s*,\s*'([^']*)'\s*\]", text):
+        entries.append({"name": match.group(1), "expression": match.group(2)})
+        if len(entries) >= limit:
+            break
+    return entries
+
+
+def _funcdef_inventory_evidence(root: Path) -> dict[str, Any] | None:
+    funcdef_path = root / "share" / "IDL" / "General" / "funcdef.pro"
+    entries = _parse_funcdef_entries(funcdef_path)
+    if not entries:
+        return None
+    snippet = "\n".join(f"{item['name']} = {item['expression']}" for item in entries[:20])
+    return {
+        "type": "idl",
+        "path": str(funcdef_path),
+        "snippet": _truncate(snippet, max_chars=900),
+        "score": 1.0,
+        "name": "funcdef",
+        "kind": "funcdef_inventory",
+        "metadata": {
+            "kind": "idl_funcdef_inventory",
+            "relative_path": _relative_path(root, str(funcdef_path)),
+            "why_relevant": "Parsed function names and expressions from share/IDL/General/funcdef.pro.",
+            "functions": entries[:20],
+            "function_count_sampled": len(entries),
+        },
+    }
+
+
+def _collect_idl_manual_evidence(root: Path, query: str, goal: str, top_k: int) -> list[dict[str, Any]]:
+    if not _looks_like_idl_request(query, goal):
+        return []
+    if "procedure signature" in goal.lower() and any(name in query.lower() for name in _IDL_KNOWN_NAMES):
+        return []
+
+    evidence: list[dict[str, Any]] = []
+    for topic in _manual_topic_candidates(query, goal):
+        item = _manual_topic_to_evidence(root, topic)
+        if item is not None:
+            evidence.append(item)
+        if topic in {"func", "funcdef"}:
+            funcdef_item = _funcdef_inventory_evidence(root)
+            if funcdef_item is not None:
+                evidence.append(funcdef_item)
+        if len(evidence) >= top_k:
+            break
+    return evidence[:top_k]
+
+
+def _idl_payload_to_evidence(root: Path, payload: dict[str, Any], why: str) -> dict[str, Any]:
+    file_path = str(payload.get("file_path", ""))
+    signature = str(payload.get("signature", ""))
+    docstring = str(payload.get("docstring") or "")
+    category = str(payload.get("category", ""))
+    snippet = _truncate(
+        "\n".join(
+            part for part in [
+                f"{payload.get('name', '')}: {signature}" if signature else str(payload.get("name", "")),
+                f"category: {category}" if category else "",
+                docstring,
+            ]
+            if part
+        )
+    )
+    return {
+        "type": "idl",
+        "path": file_path,
+        "snippet": snippet,
+        "score": 1.0,
+        "name": payload.get("name", ""),
+        "kind": payload.get("kind", "idl_procedure"),
+        "start_line": payload.get("line_number"),
+        "metadata": {
+            "kind": "idl_procedure_signature",
+            "relative_path": _relative_path(root, file_path),
+            "why_relevant": why,
+            "category": category,
+            "params": payload.get("params", []),
+            "keywords": payload.get("keywords", []),
+        },
+    }
+
+
+def _idl_row_to_evidence(root: Path, row: dict[str, Any], why: str) -> dict[str, Any]:
+    file_path = str(row.get("file_path", ""))
+    signature = str(row.get("signature", ""))
+    category = str(row.get("category", ""))
+    return {
+        "type": "idl",
+        "path": file_path,
+        "snippet": _truncate(f"{row.get('name', '')}: {signature}\ncategory: {category}"),
+        "score": 0.95,
+        "name": row.get("name", ""),
+        "kind": row.get("kind", "idl_procedure"),
+        "metadata": {
+            "kind": "idl_procedure_catalog_row",
+            "relative_path": _relative_path(root, file_path),
+            "why_relevant": why,
+            "category": category,
+        },
+    }
+
+
+def _collect_idl_catalog_evidence(
+    *,
+    root: Path,
+    swmf_root: str,
+    run_dir: str | None,
+    query: str,
+    goal: str,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    if not _looks_like_idl_request(query, goal):
+        return []
+
+    evidence: list[dict[str, Any]] = []
+    for candidate in _idl_name_candidates(query, goal):
+        payload = explain_idl_procedure_for_root(
+            name=candidate,
+            swmf_root=swmf_root,
+            run_dir=run_dir,
+        )
+        if payload.get("ok"):
+            evidence.append(
+                _idl_payload_to_evidence(
+                    root,
+                    payload,
+                    "Exact IDL procedure match from the deterministic IDL catalog.",
+                )
+            )
+        if len(evidence) >= top_k:
+            return evidence
+
+    if evidence and not _idl_list_intent(query, goal):
+        return evidence[:top_k]
+
+    category = _infer_idl_category(query, goal)
+    listing = list_idl_procedures_for_root(
+        category=category,
+        swmf_root=swmf_root,
+        run_dir=run_dir,
+    )
+    if not listing.get("ok"):
+        return evidence[:top_k]
+
+    why = (
+        f"IDL procedure catalog row in category '{category}'."
+        if category
+        else "IDL procedure catalog row."
+    )
+    seen = {(item.get("path"), item.get("name")) for item in evidence}
+    rows = list(listing.get("procedures", []))
+    priority = {name: index for index, name in enumerate(_IDL_ENTRYPOINT_PRIORITY)}
+    rows.sort(
+        key=lambda row: (
+            priority.get(str(row.get("name", "")).lower(), len(priority)),
+            str(row.get("category", "")),
+            0 if "/general/" in str(row.get("file_path", "")).lower() else 1,
+            str(row.get("name", "")).lower(),
+        )
+    )
+    for row in rows:
+        key = (row.get("file_path"), row.get("name"))
+        if key in seen:
+            continue
+        evidence.append(_idl_row_to_evidence(root, row, why))
+        seen.add(key)
+        if len(evidence) >= top_k:
+            break
+
+    return evidence[:top_k]
 
 
 def _workflow_metadata(
@@ -154,6 +520,11 @@ def _merge_evidence(
     return merged
 
 
+def _metadata_kind(item: dict[str, Any]) -> str:
+    metadata = item.get("metadata") or {}
+    return str(metadata.get("kind") or item.get("kind") or "")
+
+
 def get_evidence(
     query: str,
     mode: str | None = None,
@@ -184,6 +555,22 @@ def get_evidence(
     goal_text = goal or query
 
     assert root.swmf_root_resolved is not None
+    root_path = Path(root.swmf_root_resolved)
+
+    idl_catalog_evidence = _collect_idl_catalog_evidence(
+        root=root_path,
+        swmf_root=root.swmf_root_resolved,
+        run_dir=run_dir,
+        query=query,
+        goal=goal_text,
+        top_k=resolved_top_k,
+    )
+    idl_manual_evidence = _collect_idl_manual_evidence(
+        root=root_path,
+        query=query,
+        goal=goal_text,
+        top_k=resolved_top_k,
+    )
 
     workflow_evidence: list[dict[str, Any]] = []
     if resolved_task_type != "lookup":
@@ -192,7 +579,6 @@ def get_evidence(
             resolved_module,
             resolved_task_type,
         )
-        root_path = Path(root.swmf_root_resolved)
         for item in workflow_items:
             item["metadata"] = _workflow_metadata(
                 root_path,
@@ -211,7 +597,6 @@ def get_evidence(
         goal=goal_text,
     )
 
-    root_path = Path(root.swmf_root_resolved)
     if resolved_task_type != "lookup":
         for item in evidence:
             item["metadata"] = _workflow_metadata(
@@ -222,14 +607,38 @@ def get_evidence(
             )
 
     if resolved_task_type == "lookup":
-        combined_evidence = evidence
-        summary = support_summary
+        combined_evidence = _merge_evidence(
+            _merge_evidence(idl_manual_evidence, idl_catalog_evidence, resolved_top_k),
+            evidence,
+            resolved_top_k,
+        )
+        if idl_catalog_evidence or idl_manual_evidence:
+            idl_returned = sum(1 for item in combined_evidence if _metadata_kind(item).startswith("idl_"))
+            support_count = max(0, len(combined_evidence) - idl_returned)
+            summary = (
+                f"{idl_returned} deterministic IDL evidence item(s) and "
+                f"{support_count} supporting evidence item(s) found for '{query}'"
+            )
+        else:
+            summary = support_summary
     else:
-        combined_evidence = _merge_evidence(workflow_evidence, evidence, resolved_top_k)
-        workflow_returned = min(len(workflow_evidence), len(combined_evidence))
-        support_count = max(0, len(combined_evidence) - workflow_returned)
+        combined_evidence = _merge_evidence(
+            _merge_evidence(
+                _merge_evidence(idl_manual_evidence, idl_catalog_evidence, resolved_top_k),
+                workflow_evidence,
+                resolved_top_k,
+            ),
+            evidence,
+            resolved_top_k,
+        )
+        workflow_returned = sum(
+            1 for item in combined_evidence if _metadata_kind(item) == "workflow_entrypoint"
+        )
+        idl_returned = sum(1 for item in combined_evidence if _metadata_kind(item).startswith("idl_"))
+        support_count = max(0, len(combined_evidence) - workflow_returned - idl_returned)
         summary = (
-            f"{workflow_returned} workflow evidence item(s) and "
+            f"{workflow_returned} workflow evidence item(s), "
+            f"{idl_returned} IDL catalog evidence item(s), and "
             f"{support_count} supporting evidence item(s) found for '{query}'"
         )
 

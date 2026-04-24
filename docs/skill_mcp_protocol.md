@@ -395,6 +395,24 @@ The skill, not MCP, should infer:
 - what launch path fits the user's environment
 - which missing artifact matters most
 
+## Concrete Guidance for IDL Visualization
+
+IDL visualization is part of `swmf-analyze`, with `swmf-postproc` as the
+support skill. The detailed protocol lives in
+`docs/idl_visualization_skill_protocol.md`.
+
+IDL support should not add public `idl_*` MCP tools by default. Procedure
+catalog rows, procedure signatures, source locations, and manual snippets are
+evidence returned through `get_evidence`. Run-directory and result-file facts
+are evidence returned through `inspect_artifact`.
+
+The skill, not MCP, should infer:
+
+- whether to use `read_data` plus `plot_data`, `show_data`, or `animate_data`
+- which `func` string matches the user's requested quantity
+- which `plotmode` fits the data dimensionality and grid constraints
+- whether a regular-grid transform, slice, log workflow, or graphics export is needed
+
 ## Response Schema Philosophy
 
 Tool schemas should optimize for agent reasoning, not human readability.

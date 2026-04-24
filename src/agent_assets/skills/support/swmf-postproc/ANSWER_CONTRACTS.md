@@ -13,10 +13,25 @@ Always include:
 ## For `idl_usage_guidance`
 Always include:
 - `authoritative_procedure`
+- `artifact_assumptions`
 - `function_definition_evidence`
-- `example_files`
-- `assumptions`
+- `plotmode_evidence`
 - `copy_paste_ready_example`
+- `uncertainty`
+
+## For `idl_plot_workflow`
+Always include:
+- `target_artifact`
+- `read_step`
+- `func_choice`
+- `plotmode_choice`
+- `optional_transform_or_slice`
+- `generated_pro_script`
+- `idl_execution_command`
+- `idl_log`
+- `export_files`
+- `copy_paste_ready_example`
+- `known_unknowns`
 
 ## For `coupling_architecture_explanation`
 Always include:

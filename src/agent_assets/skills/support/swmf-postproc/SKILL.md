@@ -17,6 +17,7 @@ own directly.
 ## Scope
 
 * IDL procedure discovery and usage guidance
+* IDL snapshot, log, animation, transform, slicing, and graphics-export workflows
 * coupling architecture explanation and Mermaid diagrams
 * output artifact layout and interpretation context
 * postprocessing failure triage (before handing off to `swmf-debug`)
@@ -25,8 +26,9 @@ Not in scope: general failure diagnosis, PARAM semantics, build/run workflow.
 
 ## Immediate Load Rules
 
-If the request mentions IDL plotting, `plot_data`, `plot_func`, `show_data`,
-`read_data`, or asks to list plotting procedures:
+If the request mentions IDL plotting, `read_data`, `plot_data`, `plot_func`,
+`show_data`, `animate_data`, `plotmode`, `func`, IDL log plotting, graphics
+export, or asks to list plotting procedures:
 - Read `IDL_VISUALIZATION.md`
 - Read `ANSWER_CONTRACTS.md`
 
@@ -41,15 +43,23 @@ For output inventory:
 ```
 inspect_artifact(artifact_type="run_dir", path=<run_dir>)
 ```
+Prefer an existing extracted run directory over an archive when both are
+present. For `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01`; treat
+`Run_Max_RP_CME3.tar.gz` only as a fallback/source archive.
 
 For IDL procedures:
 ```
-get_evidence(mode="keyword", goal="IDL procedure signature and usage")
+get_evidence(query=<procedure-or-task>, mode="keyword", goal="IDL procedure signature and usage")
 ```
-Precision follow-up:
+For IDL workflow detail:
 ```
-get_evidence(mode="keyword", goal="IDL procedure detail or category narrowing")
+get_evidence(query=<func/plotmode/transform/export term>, mode="keyword", goal="IDL visualization manual detail")
 ```
+If a run directory or output file is named:
+```
+inspect_artifact(artifact_type="run_dir"|"result", path=<path>)
+```
+
 Use only the files or procedures named by the v2 result for any direct reads.
 
 For coupling architecture:
@@ -71,8 +81,9 @@ If conflicting evidence → hand off to `swmf-debug`.
 ## Authority Order
 
 1. Direct tool output tied to source files or runtime artifacts
-2. Direct source/doc reads from `share/IDL`, coupling sources, output artifacts named by v2 tools
-3. Heuristic source evidence
+2. Deterministic IDL catalog evidence returned by `get_evidence`
+3. Direct source/doc reads from `share/IDL`, `docs/idl.md`, coupling sources, output artifacts named by v2 tools
+4. Heuristic source evidence
 
 Never let heuristic search override direct v2 artifact evidence.
 For coupling precision follow-up:

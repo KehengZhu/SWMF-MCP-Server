@@ -50,7 +50,8 @@ tools:
     description: >
       Retrieve grounded local evidence for a query. Use this for exact lookup,
       symbol or parameter evidence, source snippets, documentation, examples,
-      IDL-related evidence, and workflow evidence when task_type is set.
+      IDL-related evidence, including deterministic IDL procedure catalog
+      rows/signatures, and workflow evidence when task_type is set.
     input_schema:
       query: {type: string, required: true}
       mode:

@@ -61,13 +61,14 @@ from __future__ import annotations
 
 import os
 import re
+import struct
 from pathlib import Path
 from typing import Any
 
 from ._helpers import resolve_root_or_failure, with_root
 from ._router import raw_result_to_evidence_item, _check_index
 from .debug_protocol import _extract_first_error_payload, _extract_stacktrace_lines
-from ..core.common import read_text_file
+from ..core.common import build_path_search_guidance
 from ..knowledge import service as ks
 from ..parsing.param_parser import parse_param_text
 from ..parsing.external_refs import extract_external_references_from_param_text
@@ -105,6 +106,7 @@ _SUCCESS_RE = re.compile(r"SWMF\s+(?:FINISHED|SUCCESS|DONE)\b", re.IGNORECASE)
 _BINARY_EXTENSIONS = frozenset({".sav", ".nc", ".cdf", ".fits", ".fit", ".hdf", ".hdf5", ".bin"})
 # SWMF text output extensions
 _SWMF_OUTPUT_EXTENSIONS = frozenset({".out", ".dat", ".log"})
+_IDL_PLOT_EXTENSIONS = frozenset({".out", ".outs"})
 
 # Build error patterns
 _COMPILE_ERROR_RE = re.compile(
@@ -124,6 +126,20 @@ _SWMF_ROOT_MARKERS = [
     "Scripts/TestParam.pl",
     "Makefile",
     "src/",
+]
+
+_COMPONENT_DIR_PREFIXES = ("GM", "IE", "SC", "IH", "OH", "UA", "IM", "PW", "RB", "SP")
+_RUN_DIR_EXPECTED_ENTRIES = [
+    "PARAM.in",
+    "runlog",
+    "SWMF.SUCCESS",
+    "SWMF.DONE",
+    "IH",
+    "GM",
+    "IE",
+    "SC",
+    "OH",
+    "UA",
 ]
 
 
@@ -543,6 +559,180 @@ def _inspect_xml(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
 # run_dir inspector
 # ---------------------------------------------------------------------------
 
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            key = str(path.expanduser().resolve())
+        except OSError:
+            key = str(path.expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path.expanduser())
+    return deduped
+
+
+def _run_dir_search_roots(path_str: str, swmf_root: str) -> list[Path]:
+    raw_path = Path(path_str).expanduser()
+    cwd = Path.cwd().resolve()
+    resolved_missing = raw_path if raw_path.is_absolute() else cwd / raw_path
+    swmf_root_path = Path(swmf_root).expanduser().resolve()
+    workspace_root = swmf_root_path.parent
+
+    roots = [
+        cwd,
+        resolved_missing.parent,
+        resolved_missing.parent.parent,
+        workspace_root,
+        workspace_root / "SWMFSOLAR",
+        cwd.parent,
+        cwd.parent / "SWMFSOLAR",
+    ]
+
+    for parent in list(resolved_missing.parents[:4]):
+        roots.append(parent)
+        roots.append(parent / "SWMFSOLAR")
+
+    return _dedupe_paths(roots)
+
+
+def _has_expected_run_entry(path_text: str) -> bool:
+    path = Path(path_text)
+    if not path.is_dir():
+        return False
+    return any((path / entry).exists() for entry in _RUN_DIR_EXPECTED_ENTRIES)
+
+
+def _build_run_dir_not_found_finding(
+    path_str: str,
+    swmf_root: str,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_path = Path(path_str).expanduser()
+    keyword_hints = [raw_path.name, raw_path.stem, "run01", "run", "case", "output"]
+    guidance = build_path_search_guidance(
+        path_role="run_dir",
+        search_roots=_run_dir_search_roots(path_str, swmf_root),
+        expected_entries=_RUN_DIR_EXPECTED_ENTRIES,
+        keyword_hints=keyword_hints,
+    )
+
+    candidates = guidance.get("path_search_candidates", [])
+    if isinstance(candidates, list):
+        candidates = sorted(
+            (str(candidate) for candidate in candidates),
+            key=lambda candidate: (not _has_expected_run_entry(candidate), candidate),
+        )
+        guidance["path_search_candidates"] = candidates
+
+    finding = {
+        "kind": "run_dir_not_found",
+        "location": path_str,
+        "description": f"Path is not a directory: {path_str}. Candidate run directories were searched.",
+        **guidance,
+    }
+    summary = f"Not a directory: {path_str}. Path-search candidates: {len(candidates)}."
+    return summary, [finding], []
+
+
+def _component_from_dir_name(name: str) -> str | None:
+    upper = name.upper()
+    for comp in _COMPONENT_DIR_PREFIXES:
+        if upper == comp or upper.startswith(comp):
+            return comp
+    return None
+
+
+def _sample_names(paths: list[Path], limit: int = 8) -> list[str]:
+    return [path.name for path in sorted(paths)[:limit]]
+
+
+def _snapshot_frame_summary(files: list[Path]) -> dict[str, str]:
+    sorted_files = sorted(files)
+    if not sorted_files:
+        return {}
+
+    middle_index = len(sorted_files) // 2
+    first = sorted_files[0]
+    middle = sorted_files[middle_index]
+    last = sorted_files[-1]
+    return {
+        "first_frame": first.name,
+        "middle_frame": middle.name,
+        "last_frame": last.name,
+        "first_frame_path": str(first),
+        "middle_frame_path": str(middle),
+        "last_frame_path": str(last),
+    }
+
+
+def _snapshot_groups(component_dir: Path) -> list[dict[str, Any]]:
+    groups: dict[str, list[Path]] = {}
+    for output_file in component_dir.glob("*.out"):
+        match = re.match(r"(.+)_t\d+(?:_n\d+)?\.out$", output_file.name)
+        if not match:
+            continue
+        groups.setdefault(match.group(1), []).append(output_file)
+
+    grouped: list[dict[str, Any]] = []
+    for base_name, files in sorted(groups.items()):
+        combined_name = f"{base_name}.outs"
+        has_step_suffix = any(re.search(r"_t\d+_n\d+\.out$", item.name) for item in files)
+        grouped.append({
+            "base": base_name,
+            "pattern": f"{base_name}_t*_n*.out" if has_step_suffix else f"{base_name}_t*.out",
+            "count": len(files),
+            "samples": _sample_names(files, limit=5),
+            **_snapshot_frame_summary(files),
+            "expected_outs": combined_name,
+            "combined_outs": combined_name,
+            "combined_outs_exists": (component_dir / combined_name).is_file(),
+        })
+    return grouped[:12]
+
+
+def _component_output_findings(p: Path, question: str) -> list[dict[str, Any]]:
+    q_lower = question.lower()
+    focused = any(
+        token in q_lower
+        for token in ("ih", "z=0", ".out", ".outs", "animate", "animation", "cut", "plane")
+    )
+
+    findings: list[dict[str, Any]] = []
+    for subdir in sorted((item for item in p.iterdir() if item.is_dir()), key=lambda item: item.name):
+        component = _component_from_dir_name(subdir.name)
+        if component is None:
+            continue
+        if not focused and component != "IH":
+            continue
+
+        pattern_matches: dict[str, dict[str, Any]] = {}
+        for pattern in ("z=0*.out", "z=0*.outs", "x=0*.out", "y=0*.out", "*.out", "*.outs", "*.log", "PARAM.in"):
+            matches = sorted(subdir.glob(pattern))
+            pattern_matches[pattern] = {
+                "count": len(matches),
+                "samples": _sample_names(matches, limit=8),
+            }
+
+        snapshot_groups = _snapshot_groups(subdir)
+        total_out = pattern_matches["*.out"]["count"]
+        total_outs = pattern_matches["*.outs"]["count"]
+        findings.append({
+            "kind": "component_output_files",
+            "location": str(subdir),
+            "description": (
+                f"{component} output directory has {total_out} .out file(s), "
+                f"{total_outs} .outs file(s), and {len(snapshot_groups)} time-snapshot group(s)."
+            ),
+            "component": component,
+            "patterns": pattern_matches,
+            "snapshot_groups": snapshot_groups,
+        })
+
+    return findings
+
+
 def _inspect_run_dir(
     path_str: str,
     question: str,
@@ -550,7 +740,7 @@ def _inspect_run_dir(
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     p = Path(path_str)
     if not p.is_dir():
-        return f"Not a directory: {path_str}", [], []
+        return _build_run_dir_not_found_finding(path_str, swmf_root)
 
     findings: list[dict[str, Any]] = []
 
@@ -653,10 +843,7 @@ def _inspect_run_dir(
     # --- Output subdirectory detection ---
     output_dirs: list[str] = []
     for subdir in p.iterdir():
-        if subdir.is_dir() and any(
-            subdir.name.upper().startswith(comp)
-            for comp in ("GM", "IE", "SC", "IH", "OH", "UA")
-        ):
+        if subdir.is_dir() and _component_from_dir_name(subdir.name) is not None:
             output_dirs.append(subdir.name + "/")
     if output_dirs:
         findings.append({
@@ -665,6 +852,8 @@ def _inspect_run_dir(
             "description": f"Component output subdirectories found: {', '.join(output_dirs[:8])}",
             "subdirs": output_dirs[:8],
         })
+
+    findings.extend(_component_output_findings(p, question))
 
     # --- Evidence from question ---
     evidence: list[dict[str, Any]] = []
@@ -817,6 +1006,192 @@ def _inspect_build_output(path_str: str, question: str) -> tuple[str, list[dict[
 # result inspector
 # ---------------------------------------------------------------------------
 
+def _read_fortran_record(data: bytes, offset: int, endian: str) -> tuple[bytes, int] | None:
+    if offset + 8 > len(data):
+        return None
+    (length,) = struct.unpack_from(f"{endian}I", data, offset)
+    start = offset + 4
+    end = start + length
+    trailer_end = end + 4
+    if length > 10_000_000 or trailer_end > len(data):
+        return None
+    (trailer,) = struct.unpack_from(f"{endian}I", data, end)
+    if trailer != length:
+        return None
+    return data[start:end], trailer_end
+
+
+def _decode_idl_string(raw: bytes) -> str:
+    return raw.decode("ascii", errors="replace").replace("\x00", " ").strip()
+
+
+def _split_idl_names(raw: str) -> list[str]:
+    return [token for token in re.split(r"[\s,]+", raw.strip()) if token]
+
+
+def _parse_idl_binary_plot_header(path: Path) -> dict[str, Any] | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if len(data) < 32:
+        return None
+
+    for endian in ("<", ">"):
+        offset = 0
+        first = _read_fortran_record(data, offset, endian)
+        if first is None:
+            continue
+        headline_raw, offset = first
+        if len(headline_raw) not in (79, 500):
+            continue
+
+        second = _read_fortran_record(data, offset, endian)
+        if second is None:
+            continue
+        header_raw, offset = second
+        if len(header_raw) == 20:
+            filetype = "real4" if len(headline_raw) == 79 else "REAL4"
+            it, time_value, ndim_raw, neqpar, nw = struct.unpack(f"{endian}ifiii", header_raw)
+            real_bytes = 4
+        elif len(header_raw) == 24:
+            filetype = "real8" if len(headline_raw) == 79 else "REAL8"
+            it, time_value, ndim_raw, neqpar, nw = struct.unpack(f"{endian}idiii", header_raw)
+            real_bytes = 8
+        else:
+            continue
+
+        ndim = abs(int(ndim_raw))
+        if ndim < 1 or ndim > 3 or neqpar < 0 or nw < 0:
+            continue
+
+        nx_record = _read_fortran_record(data, offset, endian)
+        if nx_record is None:
+            continue
+        nx_raw, offset = nx_record
+        if len(nx_raw) < 4 * ndim:
+            continue
+        nx = list(struct.unpack(f"{endian}{ndim}i", nx_raw[: 4 * ndim]))
+
+        if neqpar:
+            eqpar_record = _read_fortran_record(data, offset, endian)
+            if eqpar_record is None:
+                continue
+            _, offset = eqpar_record
+
+        var_record = _read_fortran_record(data, offset, endian)
+        if var_record is None:
+            continue
+        var_raw, offset_after_header = var_record
+        names = _split_idl_names(_decode_idl_string(var_raw))
+        coord_names = names[:ndim]
+        variable_names = names[ndim: ndim + nw]
+        parameter_names = names[ndim + nw: ndim + nw + neqpar]
+
+        ncell = 1
+        for n in nx:
+            ncell *= max(1, int(n))
+        pictsize = offset_after_header + 8 * (1 + nw) + real_bytes * (ndim + nw) * ncell
+        npictinfile = None
+        if pictsize > 0 and len(data) >= pictsize and len(data) % pictsize == 0:
+            npictinfile = len(data) // pictsize
+
+        return {
+            "kind": "idl_plot_file_header",
+            "format": "binary",
+            "location": str(path),
+            "description": f"SWMF IDL binary plot-file header detected ({filetype}).",
+            "filetype": filetype,
+            "npictinfile": npictinfile,
+            "headline": _decode_idl_string(headline_raw),
+            "it": int(it),
+            "time": float(time_value),
+            "gencoord": int(ndim_raw < 0),
+            "ndim": ndim,
+            "neqpar": int(neqpar),
+            "nw": int(nw),
+            "nx": nx,
+            "coord_names": coord_names,
+            "variable_names": variable_names,
+            "parameter_names": parameter_names,
+            "header_length": len(headline_raw),
+        }
+    return None
+
+
+def _parse_idl_ascii_plot_header(path: Path) -> dict[str, Any] | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 4:
+        return None
+
+    header_tokens = lines[1].split()
+    if len(header_tokens) < 5:
+        return None
+    try:
+        it = int(header_tokens[0])
+        time_value = float(header_tokens[1])
+        ndim_raw = int(header_tokens[2])
+        neqpar = int(header_tokens[3])
+        nw = int(header_tokens[4])
+    except ValueError:
+        return None
+
+    ndim = abs(ndim_raw)
+    if ndim < 1 or ndim > 3 or neqpar < 0 or nw < 0 or len(lines) < 4 + (1 if neqpar else 0):
+        return None
+
+    try:
+        nx = [int(token) for token in lines[2].split()[:ndim]]
+    except ValueError:
+        return None
+    if len(nx) != ndim:
+        return None
+
+    var_line_index = 3 + (1 if neqpar else 0)
+    if var_line_index >= len(lines):
+        return None
+    names = _split_idl_names(lines[var_line_index])
+
+    return {
+        "kind": "idl_plot_file_header",
+        "format": "ascii",
+        "location": str(path),
+        "description": "SWMF IDL ASCII plot-file header detected.",
+        "filetype": "ascii",
+        "npictinfile": 1,
+        "headline": lines[0],
+        "it": it,
+        "time": time_value,
+        "gencoord": int(ndim_raw < 0),
+        "ndim": ndim,
+        "neqpar": neqpar,
+        "nw": nw,
+        "nx": nx,
+        "coord_names": names[:ndim],
+        "variable_names": names[ndim: ndim + nw],
+        "parameter_names": names[ndim + nw: ndim + nw + neqpar],
+    }
+
+
+def _inspect_idl_plot_result(path: Path) -> tuple[str, list[dict[str, Any]]] | None:
+    header = _parse_idl_binary_plot_header(path)
+    if header is None:
+        header = _parse_idl_ascii_plot_header(path)
+    if header is None:
+        return None
+
+    variables = ", ".join(header.get("variable_names", [])[:12]) or "unknown"
+    summary = (
+        f"SWMF IDL plot file '{path.name}': {header['filetype']}, "
+        f"ndim={header['ndim']}, nw={header['nw']}, variables: {variables}."
+    )
+    return summary, [header]
+
 def _inspect_result(path_str: str, question: str) -> tuple[str, list[dict[str, Any]]]:
     p = Path(path_str)
 
@@ -832,6 +1207,11 @@ def _inspect_result(path_str: str, question: str) -> tuple[str, list[dict[str, A
 
     suffix = p.suffix.lower()
     findings: list[dict[str, Any]] = []
+
+    if suffix in _IDL_PLOT_EXTENSIONS:
+        idl_result = _inspect_idl_plot_result(p)
+        if idl_result is not None:
+            return idl_result
 
     # --- Binary file types ---
     if suffix in _BINARY_EXTENSIONS:

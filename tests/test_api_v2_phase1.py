@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -144,6 +145,118 @@ class TestGetEvidence:
         result = self._call(query="test", scope=["gm", "ie"])
         assert result["scope"] == ["GM", "IE"]
 
+    def test_idl_procedure_query_uses_catalog_evidence(self, tmp_path: Path) -> None:
+        swmf_root = tmp_path / "SWMF"
+        (swmf_root / "Scripts").mkdir(parents=True)
+        (swmf_root / "share" / "IDL" / "General").mkdir(parents=True)
+        (swmf_root / "Config.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "PARAM.XML").write_text("<param></param>\n", encoding="utf-8")
+        (swmf_root / "Scripts" / "TestParam.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "share" / "IDL" / "General" / "procedures.pro").write_text(
+            "; Plot functions from data already read by read_data.\n"
+            "pro plot_data, func=func, plotmode=plotmode\n"
+            "end\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(
+            query="plot_data",
+            mode="keyword",
+            goal="IDL procedure signature and usage",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "get_evidence")
+        assert result["evidence"]
+        first = result["evidence"][0]
+        assert first["type"] == "idl"
+        assert first["name"] == "plot_data"
+        assert first["metadata"]["kind"] == "idl_procedure_signature"
+        assert first["metadata"]["relative_path"].endswith("share/IDL/General/procedures.pro")
+
+    def test_idl_inventory_query_lists_catalog_rows(self, tmp_path: Path) -> None:
+        swmf_root = tmp_path / "SWMF"
+        (swmf_root / "Scripts").mkdir(parents=True)
+        (swmf_root / "share" / "IDL" / "General").mkdir(parents=True)
+        (swmf_root / "Config.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "PARAM.XML").write_text("<param></param>\n", encoding="utf-8")
+        (swmf_root / "Scripts" / "TestParam.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "share" / "IDL" / "General" / "procedures.pro").write_text(
+            "pro plot_data\n"
+            "end\n"
+            "pro read_data\n"
+            "end\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(
+            query="list IDL plotting procedures",
+            mode="keyword",
+            top_k=5,
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "get_evidence")
+        assert any(item["name"] == "plot_data" for item in result["evidence"])
+        assert all(item["type"] == "idl" for item in result["evidence"][:1])
+
+    def test_idl_manual_plotmode_query_returns_manual_evidence(self, tmp_path: Path) -> None:
+        swmf_root = tmp_path / "SWMF"
+        (swmf_root / "Scripts").mkdir(parents=True)
+        (swmf_root / "Config.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "PARAM.XML").write_text("<param></param>\n", encoding="utf-8")
+        (swmf_root / "Scripts" / "TestParam.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+
+        result = self._call(
+            query="plotmode",
+            mode="keyword",
+            goal="IDL visualization manual detail",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "get_evidence")
+        assert result["evidence"]
+        first = result["evidence"][0]
+        assert first["type"] == "idl"
+        assert first["metadata"]["kind"] == "idl_manual_section"
+        assert first["metadata"]["relative_path"].endswith("docs/idl.md") or "docs/idl.md" in first["path"]
+        assert "Plotting modes" in first["snippet"]
+        assert all("recommended" not in item for item in result["evidence"])
+        assert all("next_action" not in item for item in result["evidence"])
+
+    def test_idl_func_query_returns_manual_or_funcdef_evidence(self, tmp_path: Path) -> None:
+        swmf_root = tmp_path / "SWMF"
+        general_dir = swmf_root / "share" / "IDL" / "General"
+        (swmf_root / "Scripts").mkdir(parents=True)
+        general_dir.mkdir(parents=True)
+        (swmf_root / "Config.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "PARAM.XML").write_text("<param></param>\n", encoding="utf-8")
+        (swmf_root / "Scripts" / "TestParam.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (general_dir / "funcdef.pro").write_text(
+            "function funcdef, xx, w, func\n"
+            "functiondef = $\n"
+            "  strlowcase(transpose([ $\n"
+            "  ['calfven', 'b/sqrt(rho*mu0A)'], $\n"
+            "  ['pbeta', 'p/(bb/(2*mu0))'] $ \n"
+            "  ]))\n"
+            "end\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(
+            query="func",
+            mode="keyword",
+            goal="IDL visualization manual detail",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "get_evidence")
+        kinds = {item.get("metadata", {}).get("kind") for item in result["evidence"]}
+        assert "idl_manual_section" in kinds
+        assert "idl_funcdef_inventory" in kinds
+        funcdef_item = next(item for item in result["evidence"] if item["metadata"]["kind"] == "idl_funcdef_inventory")
+        assert "calfven" in funcdef_item["snippet"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool 3: get_evidence workflow modes
@@ -234,6 +347,37 @@ class TestInspectArtifact:
         kwargs.setdefault("swmf_root", str(Path(__file__).parents[1]))
         return mod.inspect_artifact(**kwargs)
 
+    def _make_fake_swmf_root(self, workspace: Path) -> Path:
+        swmf_root = workspace / "SWMF"
+        (swmf_root / "Scripts").mkdir(parents=True)
+        (swmf_root / "Config.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        (swmf_root / "PARAM.XML").write_text("<param></param>\n", encoding="utf-8")
+        (swmf_root / "Scripts" / "TestParam.pl").write_text("#!/usr/bin/env perl\n", encoding="utf-8")
+        return swmf_root
+
+    def _write_fake_idl_real4_plot(self, path: Path) -> None:
+        def record(payload: bytes) -> bytes:
+            marker = struct.pack("<I", len(payload))
+            return marker + payload + marker
+
+        headline = b"km Mp/cc km/s km/s km/s nT nT nT nPa".ljust(79, b" ")
+        header = struct.pack("<ifiii", 77, 60.360603, 2, 2, 7)
+        nx = struct.pack("<2i", 2, 3)
+        eqpar = struct.pack("<2f", 1000.0, 1.66667)
+        names = b"x y Rho Ux Uy Uz Bx By Bz xSI gamma".ljust(79, b" ")
+        ncell = 6
+        x = struct.pack(f"<{2 * ncell}f", *([0.0] * (2 * ncell)))
+        w_records = b"".join(record(struct.pack(f"<{ncell}f", *([0.0] * ncell))) for _ in range(7))
+        path.write_bytes(
+            record(headline)
+            + record(header)
+            + record(nx)
+            + record(eqpar)
+            + record(names)
+            + record(x)
+            + w_records
+        )
+
     def test_importable(self) -> None:
         mod = _import_tool("inspect_artifact")
         assert hasattr(mod, "inspect_artifact")
@@ -267,6 +411,124 @@ class TestInspectArtifact:
     def test_question_defaults_to_empty_string(self) -> None:
         result = self._call(artifact_type="log", path="some/path")
         assert result["question"] == ""
+
+    def test_run_dir_not_found_returns_swmfsolar_path_candidates(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "SWMFSOLAR" / "Run_Max_RP_CME3" / "run01"
+        ih_dir = run_dir / "IH"
+        ih_dir.mkdir(parents=True)
+        (ih_dir / "z=0_var_3_t0001.out").write_text("x y z bx by\n", encoding="utf-8")
+        (workspace / "SWMFSOLAR" / "Run_Max_RP_CME3.tar.gz").write_text("archive\n", encoding="utf-8")
+
+        other_cwd = tmp_path / "elsewhere"
+        other_cwd.mkdir()
+        monkeypatch.chdir(other_cwd)
+
+        result = self._call(
+            artifact_type="run_dir",
+            path="Run_Max_RP_CME3",
+            question="animate IH results from z=0 .out cut planes",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        finding = next(item for item in result["findings"] if item["kind"] == "run_dir_not_found")
+        candidates = finding["path_search_candidates"]
+        assert str(run_dir) in candidates
+        assert all(not candidate.endswith(".tar.gz") for candidate in candidates)
+        assert candidates.index(str(run_dir)) == 0
+
+    def test_run_dir_reports_component_snapshot_output_groups(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "SWMFSOLAR" / "Run_Max_RP_CME3" / "run01"
+        ih_dir = run_dir / "IH"
+        ih_dir.mkdir(parents=True)
+        (ih_dir / "z=0_var_3_t0001.out").write_text("x y z bx by\n", encoding="utf-8")
+        (ih_dir / "z=0_var_3_t0002.out").write_text("x y z bx by\n", encoding="utf-8")
+
+        result = self._call(
+            artifact_type="run_dir",
+            path=str(run_dir),
+            question="animate IH z=0 .out snapshots",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        finding = next(
+            item
+            for item in result["findings"]
+            if item["kind"] == "component_output_files" and item["component"] == "IH"
+        )
+        assert finding["patterns"]["z=0*.out"]["count"] == 2
+        assert "z=0_var_3_t0001.out" in finding["patterns"]["z=0*.out"]["samples"]
+        group = next(item for item in finding["snapshot_groups"] if item["pattern"] == "z=0_var_3_t*.out")
+        assert group["combined_outs"] == "z=0_var_3.outs"
+        assert group["combined_outs_exists"] is False
+        assert group["first_frame"] == "z=0_var_3_t0001.out"
+        assert group["middle_frame"] == "z=0_var_3_t0002.out"
+        assert group["last_frame"] == "z=0_var_3_t0002.out"
+        assert group["first_frame_path"].endswith("z=0_var_3_t0001.out")
+
+    def test_run_dir_groups_timestep_and_iteration_snapshot_names(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        ih_dir = run_dir / "IH"
+        ih_dir.mkdir(parents=True)
+        (ih_dir / "z=0_var_3_t00020000_n00005000.out").write_text("x y z bx by\n", encoding="utf-8")
+        (ih_dir / "z=0_var_3_t00030000_n00007500.out").write_text("x y z bx by\n", encoding="utf-8")
+        (ih_dir / "z=0_var_3_t00040000_n00010000.out").write_text("x y z bx by\n", encoding="utf-8")
+        (ih_dir / "z=0_var_3.outs").write_text("combined\n", encoding="utf-8")
+
+        result = self._call(
+            artifact_type="run_dir",
+            path=str(run_dir),
+            question="animate IH z=0 .out snapshots",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        finding = next(item for item in result["findings"] if item["kind"] == "component_output_files")
+        group = next(item for item in finding["snapshot_groups"] if item["base"] == "z=0_var_3")
+        assert group["pattern"] == "z=0_var_3_t*_n*.out"
+        assert group["count"] == 3
+        assert group["expected_outs"] == "z=0_var_3.outs"
+        assert group["combined_outs_exists"] is True
+        assert group["first_frame"] == "z=0_var_3_t00020000_n00005000.out"
+        assert group["middle_frame"] == "z=0_var_3_t00030000_n00007500.out"
+        assert group["last_frame"] == "z=0_var_3_t00040000_n00010000.out"
+        assert group["middle_frame_path"].endswith("z=0_var_3_t00030000_n00007500.out")
+
+    def test_result_extracts_binary_idl_plot_header(self, tmp_path: Path) -> None:
+        swmf_root = self._make_fake_swmf_root(tmp_path)
+        plot_file = tmp_path / "z=0_var_3_t00020000_n00005000.out"
+        self._write_fake_idl_real4_plot(plot_file)
+
+        result = self._call(
+            artifact_type="result",
+            path=str(plot_file),
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        finding = next(item for item in result["findings"] if item["kind"] == "idl_plot_file_header")
+        assert finding["filetype"] == "real4"
+        assert finding["npictinfile"] == 1
+        assert finding["headline"].startswith("km Mp/cc")
+        assert finding["it"] == 77
+        assert finding["ndim"] == 2
+        assert finding["neqpar"] == 2
+        assert finding["nw"] == 7
+        assert finding["nx"] == [2, 3]
+        assert finding["coord_names"] == ["x", "y"]
+        assert finding["variable_names"] == ["Rho", "Ux", "Uy", "Uz", "Bx", "By", "Bz"]
+        assert finding["parameter_names"] == ["xSI", "gamma"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

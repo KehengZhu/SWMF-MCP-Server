@@ -86,3 +86,164 @@ def test_postproc_skill_references_companion_playbooks() -> None:
 
     assert "IDL_VISUALIZATION.md" in skill_text
     assert "COUPLING_ARCHITECTURE.md" in skill_text
+
+
+def test_idl_animation_playbook_documents_out_to_outs_workflow() -> None:
+    playbook_text = (
+        _skills_root() / "support" / "swmf-postproc" / "IDL_VISUALIZATION.md"
+    ).read_text(encoding="utf-8")
+    analyze_text = (_skills_root() / "swmf-analyze" / "SKILL.md").read_text(encoding="utf-8")
+    postproc_text = (_skills_root() / "support" / "swmf-postproc" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "cat z=0_var_3_t*.out > z=0_var_3.outs" in playbook_text
+    assert "filename='z=0_var_3.outs'" in playbook_text
+    assert "func='u bx;by'" in playbook_text
+    assert "animate_data" in playbook_text
+    assert 'get_evidence(query="animate_data"' in playbook_text
+    assert "single-snapshot" in playbook_text
+    assert "multi-snapshot" in playbook_text
+    assert "prefer an existing extracted run directory over an archive" in analyze_text
+    assert "SWMFSOLAR/Run_Max_RP_CME3/run01" in postproc_text
+
+
+def test_idl_playbook_documents_full_postprocessing_policy() -> None:
+    playbook_text = (
+        _skills_root() / "support" / "swmf-postproc" / "IDL_VISUALIZATION.md"
+    ).read_text(encoding="utf-8")
+    analyze_text = (_skills_root() / "swmf-analyze" / "SKILL.md").read_text(encoding="utf-8")
+    compare_text = (_skills_root() / "swmf-compare" / "SKILL.md").read_text(encoding="utf-8")
+
+    required_terms = [
+        "## Decision Matrix",
+        "Quick single plot: `show_data`",
+        "Controlled single snapshot: `read_data` followed by `plot_data`",
+        "Multiple frames or files: `animate_data`",
+        "Logfile columns: `read_log_data` followed by `plot_log_data`",
+        "Derived logfile quantities: read the log as 1D data with `read_data`",
+        "Structured 3D slice scan: `read_data`, configure `func`/`plotmode`, then `slice_data`",
+        "`IDL_PATH`",
+        "`IDL_STARTUP`",
+        "`idlrc`",
+        "`retall`",
+        "`set_default_values`",
+        "ASCII",
+        "`real4`",
+        "`real8`",
+        "`transform='regular'`",
+        "`transform='polar'`",
+        "`transform='unpolar'`",
+        "`transform='sphere'`",
+        "`transform='my'`",
+        "`nxreg`",
+        "`xreglimits`",
+        "`dotransform`",
+        "`w=w1-w0`",
+        "`wreg=wreg1-wreg0`",
+        "`coarsen`",
+        "`!x.range`",
+        "`cut=grid(...)`",
+        "`triplet(...)`",
+        "`quadruplet(...)`",
+        "`velpos`",
+        "`rcut`",
+        "`slice_data_restore`",
+        "`multiplot`",
+        "`nplotstore`",
+        "`set_device,'file.eps'`",
+        "`close_device`",
+        "`savemovie='mp4'`",
+        "`@script`",
+        "`.r script`",
+        "true `pro name`",
+    ]
+    for term in required_terms:
+        assert term in playbook_text
+
+    assert "manual detail: `func`, `plotmode`, `transform`, `slice`, `export`" in analyze_text
+    assert "support/swmf-postproc/IDL_VISUALIZATION.md" in compare_text
+
+
+def test_idl_playbook_requires_idl_first_export_workflow() -> None:
+    playbook_text = (
+        _skills_root() / "support" / "swmf-postproc" / "IDL_VISUALIZATION.md"
+    ).read_text(encoding="utf-8")
+    contract_text = (
+        _skills_root() / "support" / "swmf-postproc" / "ANSWER_CONTRACTS.md"
+    ).read_text(encoding="utf-8")
+    analyze_text = (_skills_root() / "swmf-analyze" / "SKILL.md").read_text(encoding="utf-8")
+    compare_text = (_skills_root() / "swmf-compare" / "SKILL.md").read_text(encoding="utf-8")
+
+    required_terms = [
+        "## IDL-First Execution Ladder",
+        "use SWMF IDL macros before custom\ngraphics",
+        "The script should be a macro driver",
+        "Create an `analysis/` directory",
+        "case-local `.pro` command script",
+        "`printf '@analysis/z0_u_bxy_export\\nexit\\n' | idl",
+        "analysis/<outbase>.idl.log",
+        "Only use Python, SVG, manual Fortran-record plotting",
+        "hand-written IDL\n   direct graphics",
+        "do not hand-write\n   binary readers or direct graphics",
+        "Do not check for Python plotting libraries before trying the\n   IDL path",
+        "first_frame",
+        "middle_frame",
+        "last_frame",
+        "magick -density 180 input.ps -background white -alpha remove input.png",
+        "`convert` only if `magick` is unavailable",
+        "For Codex-generated exports, prefer a command-style `analysis/<name>.pro`",
+    ]
+    for term in required_terms:
+        assert term in playbook_text
+
+    for term in [
+        "generated_pro_script",
+        "idl_execution_command",
+        "idl_log",
+        "export_files",
+    ]:
+        assert term in contract_text
+
+    assert "IDL-first execution ladder" in analyze_text
+    assert "Python/SVG/manual binary plotting" in analyze_text
+    assert "IDL-first\n     generated `.pro` workflow" in compare_text
+
+
+def test_idl_protocol_doc_contains_gold_prompt_set() -> None:
+    protocol_text = (_repo_root() / "docs" / "idl_visualization_skill_protocol.md").read_text(encoding="utf-8")
+    for prompt in [
+        "List the IDL plotting procedures in SWMF.",
+        "What `plotmode` should I use for streamlines on an irregular 2D grid?",
+        "How do I plot a quantity from a SWMF log file in IDL?",
+        "animate IH results (z=0 cut, visualize U overlayed with bx by vectors) in Run_Max_RP_CME3",
+    ]:
+        assert prompt in protocol_text
+
+
+def test_idl_protocol_doc_contains_distill_protocol() -> None:
+    protocol_text = (_repo_root() / "docs" / "idl_visualization_skill_protocol.md").read_text(encoding="utf-8")
+    required_terms = [
+        "## Distill Protocol",
+        "chat history, transcript, or session export",
+        "identify the root cause and the smallest general fix",
+        "Reconstruct the Intended Workflow",
+        "Evaluate Success and Failure",
+        "Root-Cause Pattern",
+        "Propose General Improvements",
+        "MCP evidence gap",
+        "Boundary violation",
+        "SWMF macro-first driver",
+        "Macro-first gap",
+        "hand-written direct graphics",
+        "custom parsers",
+        "MCP change, only if needed",
+        "workflow inference remains in the skill",
+        "add MCP fields only when the skill lacks factual\nevidence",
+        "Ask Immediately When Intent Is Ambiguous",
+        "Do not ask questions\nwhose answers can be discovered",
+        "`observed_behavior`",
+        "`root_cause`",
+        "`generalized_improvement`",
+        "`mcp_changes_if_needed`",
+    ]
+    for term in required_terms:
+        assert term in protocol_text

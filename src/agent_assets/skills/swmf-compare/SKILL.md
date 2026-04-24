@@ -40,7 +40,18 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
    get_evidence(query=<changed_entity>, mode="hybrid", goal="impact of difference")
    ```
 
-4. Grep: only if Steps 1–3 name a file that evidence missed; restrict to evidence paths.
+4. **IDL visualization comparison** (only when the user asks how to visualize or
+   plot the difference):
+   - inspect named result files with `inspect_artifact(artifact_type="result", path=<path>)`
+   - normalize broad plotting prompts into `func`, `plotmode`, `transform`, `slice`,
+     `compare`, or `animate_data`
+   - load `support/swmf-postproc/IDL_VISUALIZATION.md` for the comparison,
+     transform, overplot, and export policy
+   - if the user asks for plot/image/movie artifacts, use the IDL-first
+     generated `.pro` workflow from `swmf-postproc`; do not hand-render the
+     comparison in Python/SVG unless IDL fails and the user accepts that fallback
+
+5. Grep: only if Steps 1–4 name a file that evidence missed; restrict to evidence paths.
 
 ## Helper skills allowed
 
@@ -48,6 +59,8 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
 * `swmf-params` — if differences involve PARAM schema or validation
 * `swmf-postproc` / `swmf-analyze` — if comparison involves output visualization
 * `swmf-exact-lookup` — for specific changed symbol confirmation
+* for broad IDL visualization, analysis, or output-comparison plotting, route
+  through `swmf-postproc` instead of inventing IDL commands from diffs alone
 
 ## Outputs
 
