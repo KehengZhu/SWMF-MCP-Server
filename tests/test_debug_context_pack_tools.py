@@ -89,6 +89,21 @@ def test_extract_first_error_and_stacktrace_from_text() -> None:
     assert stacktrace["stacktrace_lines"]
 
 
+def test_extract_stacktrace_does_not_treat_swmf_timestamps_as_stacktrace() -> None:
+    log_text = "\n".join(
+        [
+            "SC:saved iFile=11 type=x=0_var at nStep=  506338 time=  15:00:00 h:m:s",
+            "save_los_file writing SC/IO2/los_soho_c2_4_t00150000_n00506338.out",
+            "SORTED TIMING at step  511339 SC on PE     0",
+        ]
+    )
+
+    stacktrace = extract_stacktrace(log_text=log_text)
+
+    assert stacktrace["ok"] is False
+    assert stacktrace["stacktrace_lines"] == []
+
+
 def test_compare_run_artifacts_file_diff(tmp_path: Path) -> None:
     left = tmp_path / "left.out"
     right = tmp_path / "right.out"

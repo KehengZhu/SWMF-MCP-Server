@@ -65,6 +65,8 @@ def test_shared_core_playbook_exists() -> None:
     assert "V2 MCP tool surface" in core_text
     assert "inspect_artifact" in core_text
     assert "get_evidence" in core_text
+    assert "Runlog discipline" in core_text
+    assert "Do not directly read a whole `runlog*`" in core_text
 
 
 def test_postproc_skill_bundle_files_exist() -> None:

@@ -26,6 +26,8 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ### Output interpretation
 1. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
    - output file inventory and layout
+   - compact runlog status if logs are present; do not directly read whole
+     runlogs unless the user explicitly requests raw log content
 2. `get_evidence(mode="keyword", goal="output format or field definition")`
    - field semantics, output variable definitions
 3. `get_evidence(query="postprocessing", task_type="analysis", goal="postprocessing")`
@@ -34,6 +36,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ### IDL visualization
 1. If a run directory or output file is named, first call `inspect_artifact(artifact_type="run_dir"|"result", path=<path>)`
    - deterministic artifact type, output layout, and likely plot files
+   - for `run_dir`, include PARAM-derived context (session timeline, control settings, and `#SAVEPLOT` essentials)
    - prefer an existing extracted run directory over an archive when both are present; for `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01` and treat `Run_Max_RP_CME3.tar.gz` only as a fallback/source archive
 2. Normalize the user prompt before retrieval:
    - named procedure or workflow: `plot_data`, `show_data`, `read_data`, `animate_data`, `plot_log_data`, `read_log_data`
@@ -66,6 +69,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 * postprocessing workflow evidence from `get_evidence(task_type="analysis")`
 * for IDL visualization:
   * artifact/file assumptions
+  * PARAM-driven output intent (saved plot forms/areas/cadence when available from `run_dir`)
   * authoritative IDL entrypoint or procedure
   * required `read_data`/`show_data`/`plot_data` sequence
   * relevant `func` and `plotmode` semantics

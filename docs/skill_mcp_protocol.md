@@ -381,6 +381,7 @@ The skill, not MCP, should infer:
 `swmf-run` needs evidence such as:
 
 - run directory readiness
+- PARAM-derived run intent from run directories (session timeline, control settings, save cadence)
 - job script paths
 - scheduler type
 - task count hints

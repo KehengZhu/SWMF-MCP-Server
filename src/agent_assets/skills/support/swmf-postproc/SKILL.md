@@ -46,6 +46,9 @@ inspect_artifact(artifact_type="run_dir", path=<run_dir>)
 Prefer an existing extracted run directory over an archive when both are
 present. For `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01`; treat
 `Run_Max_RP_CME3.tar.gz` only as a fallback/source archive.
+Run-dir inspection now includes concise PARAM-derived run-intent evidence
+(session timeline, control settings, and `#SAVEPLOT` essentials) and should be
+used before inferring IDL plotting cadence.
 
 For IDL procedures:
 ```
@@ -76,6 +79,8 @@ For postprocess failure:
 ```
 inspect_artifact(artifact_type="log"|"run_dir", path=...)
 ```
+Do not directly read whole runlogs unless the user explicitly requests raw log
+content; after inspection, use only bounded excerpts needed to verify findings.
 If conflicting evidence → hand off to `swmf-debug`.
 
 ## Authority Order

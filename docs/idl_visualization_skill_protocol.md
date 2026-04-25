@@ -97,6 +97,7 @@ For postprocessing entrypoint discovery:
 Required evidence:
 
 - run-directory inventory
+- PARAM-derived run intent from `PARAM.in` when present (session timeline, control settings, and `#SAVEPLOT` cadence/forms/variables)
 - output/result file presence
 - result-file type classification
 - log presence when relevant

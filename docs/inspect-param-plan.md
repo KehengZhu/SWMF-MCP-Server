@@ -52,3 +52,11 @@ The goal is to include deterministic `PARAM.in` interpretation (physical setting
 - Prefer reusable parser helpers over embedding complex PARAM logic directly in `_inspect_run_dir`.
 - Ensure output remains factual (no prescribed workflow steps in tool payload).
 - Scope decision confirmed: run-dir mode should include a concise PARAM summary plus saved-plot essentials by default; full PARAM detail remains in `artifact_type="param"`.
+
+
+next steps:
+
+- Enforce: **inspect first, raw read only if finding is missing/unreadable or user explicitly asks for
+ raw text**.
+- Prefer `run_dir` inspection findings for PARAM intent; don’t re-open `PARAM.in` by default.
+- Compress runlog to save tokens with inspect_artifact

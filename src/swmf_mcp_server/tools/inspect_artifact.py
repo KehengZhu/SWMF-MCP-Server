@@ -59,6 +59,7 @@ run_dir       : Optional run directory used for root resolution.
 
 from __future__ import annotations
 
+from collections import Counter, deque
 import os
 import re
 import struct
@@ -85,7 +86,12 @@ _VALID_ARTIFACT_TYPES = frozenset({
     "result",
 })
 
-_MAX_FILE_CHARS = 200_000  # guard against very large files
+_MAX_FILE_CHARS = 200_000  # guard against very large non-log text files
+_LOG_HEAD_LINES = 40
+_LOG_TAIL_LINES = 120
+_LOG_TAIL_SIGNAL_LINES = 24
+_LOG_CONTEXT_LINES = 2
+_LOG_MAX_DIAGNOSTICS = 40
 
 # Component name patterns in logs (2-letter codes like GM, IE, SC, etc.)
 _COMPONENT_HEADER_RE = re.compile(
@@ -100,7 +106,33 @@ _RANK_RE = re.compile(r"(?:rank|proc|pe|cpu)\s*[#=:]\s*(\d+)", re.IGNORECASE)
 # Warning patterns
 _WARNING_RE = re.compile(r"\bWARNING\b", re.IGNORECASE)
 # Success/completion
-_SUCCESS_RE = re.compile(r"SWMF\s+(?:FINISHED|SUCCESS|DONE)\b", re.IGNORECASE)
+_SUCCESS_RE = re.compile(
+    r"(?:SWMF\s+(?:FINISHED|SUCCESS|DONE)\b|Finished\s+(?:Numerical Simulation|Finalizing SWMF))",
+    re.IGNORECASE,
+)
+_NONZERO_EXIT_RE = re.compile(r"\b(?:MPI job exited with code|exit(?:ed)? code)[:\s]+([1-9]\d*)\b", re.IGNORECASE)
+_LOG_ERROR_RE = re.compile(
+    r"\b(?:ERROR|FATAL|abort(?:ing|ed)?|segmentation fault|sigsegv|mpi_abort|exception|traceback)\b",
+    re.IGNORECASE,
+)
+_LOG_DIAGNOSTIC_RE = re.compile(
+    r"\b(?:ERROR|FATAL|WARNING|abort(?:ing|ed)?|segmentation fault|sigsegv|mpi_abort|exception|traceback|NaN|overflow|First error)\b",
+    re.IGNORECASE,
+)
+_PROGRESS_RE = re.compile(
+    r"Progress:\s*(?P<step>\d+)\s+steps,\s*(?P<sim_time>[\d.eE+\-]+)\s+s simulation time,\s*"
+    r"(?P<cpu_time>[\d.eE+\-]+)\s+s CPU time(?:,\s*Date:\s*(?P<date>\S+))?",
+    re.IGNORECASE,
+)
+_TIMING_BLOCK_RE = re.compile(r"\b(?:TIMING TREE|SORTED TIMING)\b", re.IGNORECASE)
+_SAVED_OUTPUT_RE = re.compile(r"^(?P<component>[A-Z]{2}):saved\s+iFile=\s*\d+\s+type=(?P<type>\S+)", re.IGNORECASE)
+_NUMERIC_TOKEN_RE = re.compile(r"[+-]?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?")
+_SEPARATOR_RE = re.compile(r"^-{8,}$")
+_TIMING_ROW_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_./-]*(?:\s+[+-]?\d+(?:\.\d+)?){3,}\s*$")
+_STACKTRACE_SIGNAL_RE = re.compile(
+    r"(?:traceback|backtrace|program received signal|^\s*#\d+|^\s*at\s+\S.*(?::\d+|\([^)]*\))|call stack)",
+    re.IGNORECASE,
+)
 
 # Binary file extensions (cannot be read as text)
 _BINARY_EXTENSIONS = frozenset({".sav", ".nc", ".cdf", ".fits", ".fit", ".hdf", ".hdf5", ".bin"})
@@ -129,6 +161,7 @@ _SWMF_ROOT_MARKERS = [
 ]
 
 _COMPONENT_DIR_PREFIXES = ("GM", "IE", "SC", "IH", "OH", "UA", "IM", "PW", "RB", "SP")
+_KNOWN_COMPONENT_CODES = frozenset(_COMPONENT_DIR_PREFIXES + ("CON", "PC", "PT"))
 _RUN_DIR_EXPECTED_ENTRIES = [
     "PARAM.in",
     "runlog",
@@ -141,6 +174,35 @@ _RUN_DIR_EXPECTED_ENTRIES = [
     "OH",
     "UA",
 ]
+
+_PARAM_SETTING_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\[\]/^.\-]*$")
+_PARAM_BEGIN_COMPONENT_RE = re.compile(r"^#BEGIN_COMP\s+([A-Z0-9]{2})\b", re.IGNORECASE)
+_PARAM_END_COMPONENT_RE = re.compile(r"^#END_COMP\s+([A-Z0-9]{2})\b", re.IGNORECASE)
+_PARAM_TIMELINE_COMMANDS = frozenset({
+    "#BEGIN_COMP",
+    "#END_COMP",
+    "#COMPONENTMAP",
+    "#COMPONENT",
+    "#COUPLE1",
+    "#COUPLE2",
+    "#SAVEPLOT",
+    "#STOP",
+    "#RUN",
+    "#END",
+})
+_PARAM_CONTROL_COMMANDS = frozenset({
+    "#TIMEACCURATE",
+    "#USEDATETIME",
+    "#STOP",
+    "#COUPLE1",
+    "#COUPLE2",
+    "#SAVERESTART",
+    "#SAVELOGFILE",
+    "#SAVETECPLOT",
+    "#SAVEPLOT",
+})
+_PARAM_SAVE_CADENCE_KEYS = frozenset({"DnSavePlot", "DtSavePlot", "DxSavePlot"})
+_PARAM_SAVE_COUNT_KEYS = frozenset({"nPlotFile", "nFileOut", "nPlot", "nOutputFile"})
 
 
 def _read_file_safe(path_str: str) -> tuple[str | None, str | None]:
@@ -161,24 +223,376 @@ def _read_file_safe(path_str: str) -> tuple[str | None, str | None]:
 # log inspector
 # ---------------------------------------------------------------------------
 
+def _normalize_log_pattern(line: str) -> str:
+    normalized = _NUMERIC_TOKEN_RE.sub("<N>", line.strip())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized[:180]
+
+
+def _compact_line(line: str, max_chars: int = 180) -> str:
+    return re.sub(r"\s+", " ", line.strip())[:max_chars]
+
+
+def _is_low_signal_repeated_pattern(pattern: str) -> bool:
+    if _SEPARATOR_RE.match(pattern):
+        return True
+    if pattern in {
+        "name #iter #calls sec s/iter s/call percent",
+        "name sec percent #iter #calls",
+        "SC:",
+    }:
+        return True
+    if _TIMING_BLOCK_RE.search(pattern):
+        return True
+    if _TIMING_ROW_RE.match(pattern):
+        return True
+    return (
+        pattern.count("<N>") >= 3
+        and not pattern.startswith("Progress:")
+        and not _LOG_DIAGNOSTIC_RE.search(pattern)
+    )
+
+
+def _is_low_signal_tail_line(line: str) -> bool:
+    if _SEPARATOR_RE.match(line):
+        return True
+    if line == "name #iter #calls sec s/iter s/call percent":
+        return True
+    if _TIMING_BLOCK_RE.search(line):
+        return True
+    return bool(_TIMING_ROW_RE.match(line))
+
+
+def _tail_signal_lines(tail_lines: list[str]) -> dict[str, Any]:
+    signal = [line for line in tail_lines if line and not _is_low_signal_tail_line(line)]
+    omitted = len([line for line in tail_lines if line and _is_low_signal_tail_line(line)])
+    if not signal:
+        signal = [line for line in tail_lines if line][-_LOG_TAIL_SIGNAL_LINES:]
+    return {
+        "lines": signal[-_LOG_TAIL_SIGNAL_LINES:],
+        "omitted_low_signal_lines": omitted,
+    }
+
+
+def _assemble_error_message(first_error: dict[str, Any]) -> str | None:
+    line = first_error.get("line")
+    if not line:
+        return None
+    pieces = [_compact_line(line, max_chars=260)]
+    for follow in first_error.get("context_after", []):
+        compact_follow = _compact_line(follow, max_chars=260)
+        if not compact_follow:
+            continue
+        should_attach = (
+            pieces[-1].endswith(("=", ":", "message:", "PE="))
+            or " with message:" in pieces[-1]
+            or (pieces[-1].count("(") > pieces[-1].count(")"))
+        )
+        if not should_attach:
+            break
+        pieces.append(compact_follow)
+    return " ".join(pieces)[:520]
+
+
+def _is_actionable_error_line(line: str) -> bool:
+    compact = _compact_line(line).lower()
+    if not compact:
+        return False
+    if re.match(r"error in component [a-z]{2} in session\b", compact):
+        return False
+    if "error report: no errors" in compact:
+        return False
+    return bool(_LOG_ERROR_RE.search(line))
+
+
+def _is_diagnostic_line(line: str) -> bool:
+    compact = _compact_line(line).lower()
+    if "error report: no errors" in compact:
+        return False
+    return bool(_LOG_DIAGNOSTIC_RE.search(line))
+
+
+def _update_sampled_counter(
+    counter: Counter[str],
+    samples: dict[str, dict[str, Any]],
+    key: str,
+    *,
+    line_number: int,
+    line: str,
+) -> None:
+    counter[key] += 1
+    if key not in samples:
+        samples[key] = {"line_number": line_number, "line": _compact_line(line)}
+
+
+def _stream_log_summary(path_str: str) -> tuple[dict[str, Any] | None, str | None]:
+    p = Path(path_str)
+    if not p.exists():
+        return None, f"File not found: {path_str}"
+    if p.is_dir():
+        return None, f"Path is a directory, not a file: {path_str}"
+
+    try:
+        file_size = p.stat().st_size
+    except OSError:
+        file_size = None
+
+    line_count = 0
+    head_lines: list[str] = []
+    tail_lines: deque[str] = deque(maxlen=_LOG_TAIL_LINES)
+    before_context: deque[str] = deque(maxlen=_LOG_CONTEXT_LINES)
+    first_error: dict[str, Any] | None = None
+    first_error_after_remaining = 0
+    stacktrace_lines: list[str] = []
+    stacktrace_started = False
+    diagnostics = Counter()
+    diagnostic_samples: dict[str, dict[str, Any]] = {}
+    repeated_patterns = Counter()
+    repeated_samples: dict[str, dict[str, Any]] = {}
+    component_hits = Counter()
+    rank_samples: list[str] = []
+    warning_count = 0
+    success_lines: list[dict[str, Any]] = []
+    nonzero_exit_lines: list[dict[str, Any]] = []
+    sim_times: list[str] = []
+    progress_count = 0
+    progress_first: dict[str, Any] | None = None
+    progress_last: dict[str, Any] | None = None
+    timing_blocks = Counter()
+    saved_outputs = Counter()
+
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as stream:
+            for raw_line in stream:
+                line_count += 1
+                line = raw_line.rstrip("\n\r")
+                compact = _compact_line(line)
+
+                if line_count <= _LOG_HEAD_LINES:
+                    head_lines.append(compact)
+                tail_lines.append(compact)
+
+                pattern = _normalize_log_pattern(line)
+                if pattern:
+                    _update_sampled_counter(
+                        repeated_patterns,
+                        repeated_samples,
+                        pattern,
+                        line_number=line_count,
+                        line=line,
+                    )
+
+                if first_error is not None and first_error_after_remaining > 0:
+                    first_error["context_after"].append(line.rstrip())
+                    first_error_after_remaining -= 1
+
+                if first_error is None and _is_actionable_error_line(line):
+                    first_error = {
+                        "found": True,
+                        "line_number": line_count,
+                        "line": line.strip(),
+                        "context_before": [item.rstrip() for item in before_context],
+                        "context_after": [],
+                    }
+                    first_error_after_remaining = _LOG_CONTEXT_LINES
+
+                if _is_diagnostic_line(line):
+                    key = _normalize_log_pattern(line)
+                    if key:
+                        _update_sampled_counter(
+                            diagnostics,
+                            diagnostic_samples,
+                            key,
+                            line_number=line_count,
+                            line=line,
+                        )
+
+                if _WARNING_RE.search(line):
+                    warning_count += 1
+
+                if len(rank_samples) < 3 and _RANK_RE.search(line):
+                    rank_samples.append(compact[:120])
+
+                if _SUCCESS_RE.search(line):
+                    success_lines.append({"line_number": line_count, "line": compact})
+                    success_lines = success_lines[-5:]
+
+                if _NONZERO_EXIT_RE.search(line):
+                    nonzero_exit_lines.append({"line_number": line_count, "line": compact})
+                    nonzero_exit_lines = nonzero_exit_lines[-5:]
+
+                prefix_match = _COMPONENT_PREFIX_RE.match(line)
+                if prefix_match:
+                    comp = prefix_match.group(1).upper()
+                    if comp in _KNOWN_COMPONENT_CODES:
+                        component_hits[comp] += 1
+                header_match = _COMPONENT_HEADER_RE.search(line)
+                if header_match:
+                    comp = header_match.group(1).upper()
+                    if comp in _KNOWN_COMPONENT_CODES:
+                        component_hits[comp] += 1
+
+                sim_match = _SIM_TIME_RE.search(line)
+                if sim_match:
+                    sim_times.append(sim_match.group(1))
+
+                progress_match = _PROGRESS_RE.search(line)
+                if progress_match:
+                    progress_count += 1
+                    progress_item = {
+                        "line_number": line_count,
+                        "step": int(progress_match.group("step")),
+                        "simulation_time_s": progress_match.group("sim_time"),
+                        "cpu_time_s": progress_match.group("cpu_time"),
+                        "date": progress_match.group("date"),
+                    }
+                    if progress_first is None:
+                        progress_first = progress_item
+                    progress_last = progress_item
+
+                timing_match = _TIMING_BLOCK_RE.search(line)
+                if timing_match:
+                    timing_blocks[timing_match.group(0).upper()] += 1
+
+                saved_match = _SAVED_OUTPUT_RE.search(line)
+                if saved_match:
+                    saved_outputs[f"{saved_match.group('component').upper()}:{saved_match.group('type')}"] += 1
+
+                stack_matched = bool(_STACKTRACE_SIGNAL_RE.search(line))
+                if stack_matched and not stacktrace_started:
+                    stacktrace_started = True
+                if stacktrace_started and len(stacktrace_lines) < 20:
+                    if compact:
+                        stacktrace_lines.append(compact)
+                    elif stacktrace_lines:
+                        stacktrace_started = False
+
+                before_context.append(line)
+    except OSError as e:
+        return None, f"Cannot read file: {e}"
+
+    if first_error is None:
+        first_error = {
+            "found": False,
+            "line_number": None,
+            "line": None,
+            "context_before": [],
+            "context_after": [],
+        }
+    else:
+        first_error["message"] = _assemble_error_message(first_error)
+
+    completed = bool(success_lines)
+    failed = bool(nonzero_exit_lines) or (
+        first_error.get("found") and not completed and any("abort" in key.lower() for key in diagnostics)
+    )
+    if failed:
+        status = "failed"
+    elif completed and diagnostics:
+        status = "completed_with_diagnostics"
+    elif completed:
+        status = "completed"
+    else:
+        status = "unknown"
+
+    tail_signal = _tail_signal_lines(list(tail_lines))
+    top_repeated = [
+        {
+            "pattern": pattern,
+            "count": count,
+            "first_sample": repeated_samples[pattern],
+        }
+        for pattern, count in repeated_patterns.most_common(12)
+        if count >= 5 and not _is_low_signal_repeated_pattern(pattern)
+    ]
+    top_diagnostics = [
+        {
+            "pattern": pattern,
+            "count": count,
+            "first_sample": diagnostic_samples[pattern],
+        }
+        for pattern, count in diagnostics.most_common(_LOG_MAX_DIAGNOSTICS)
+    ]
+
+    return {
+        "path": str(p),
+        "bytes": file_size,
+        "line_count": line_count,
+        "status": status,
+        "first_error": first_error,
+        "head_lines": head_lines,
+        "tail_lines": tail_signal["lines"],
+        "raw_tail_line_count": len(tail_lines),
+        "tail_omitted_low_signal_lines": tail_signal["omitted_low_signal_lines"],
+        "component_hits": dict(component_hits),
+        "rank_samples": rank_samples,
+        "warning_count": warning_count,
+        "success_lines": success_lines,
+        "nonzero_exit_lines": nonzero_exit_lines,
+        "simulation_times": {
+            "first": sim_times[0] if sim_times else None,
+            "last": sim_times[-1] if sim_times else None,
+            "sample_count": len(sim_times),
+        },
+        "progress": {
+            "count": progress_count,
+            "first": progress_first,
+            "last": progress_last,
+        },
+        "timing_blocks": dict(timing_blocks),
+        "saved_outputs": [
+            {"key": key, "count": count}
+            for key, count in saved_outputs.most_common(12)
+        ],
+        "diagnostics": top_diagnostics,
+        "repeated_patterns": top_repeated,
+        "stacktrace_lines": stacktrace_lines,
+    }, None
+
+
 def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]]]:
-    text, err = _read_file_safe(path_str)
-    if err or text is None:
+    compact, err = _stream_log_summary(path_str)
+    if err or compact is None:
         return err or "Could not read log.", []
 
-    first_error = _extract_first_error_payload(text)
-    stacktrace = _extract_stacktrace_lines(text, max_lines=20)
-    lines = text.splitlines()
-    total_lines = len(lines)
+    first_error = compact["first_error"]
+    stacktrace = compact["stacktrace_lines"]
+    total_lines = compact["line_count"]
 
     findings: list[dict[str, Any]] = []
+
+    findings.append({
+        "kind": "log_compaction",
+        "location": path_str,
+        "description": (
+            f"Scanned full log ({total_lines} lines"
+            + (f", {compact['bytes']} bytes" if compact.get("bytes") is not None else "")
+            + "); returned compact head/tail, diagnostics, progress, timing, and repeated-pattern summaries."
+        ),
+        "line_count": total_lines,
+        "bytes": compact.get("bytes"),
+        "head_lines": compact["head_lines"],
+        "tail_lines": compact["tail_lines"],
+        "raw_tail_line_count": compact["raw_tail_line_count"],
+        "tail_omitted_low_signal_lines": compact["tail_omitted_low_signal_lines"],
+        "repeated_patterns": compact["repeated_patterns"],
+    })
+
+    findings.append({
+        "kind": "run_status",
+        "location": "log",
+        "description": f"Run status classified as {compact['status']}.",
+        "status": compact["status"],
+        "success_lines": compact["success_lines"],
+        "nonzero_exit_lines": compact["nonzero_exit_lines"],
+    })
 
     # --- first error ---
     if first_error.get("found"):
         findings.append({
             "kind": "first_error",
             "location": f"line {first_error['line_number']}",
-            "description": first_error.get("line", ""),
+            "description": first_error.get("message") or first_error.get("line", ""),
             "context_before": first_error.get("context_before", []),
             "context_after": first_error.get("context_after", []),
         })
@@ -193,19 +607,7 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
         })
 
     # --- component detection ---
-    component_hits: dict[str, int] = {}
-    for line in lines[:500]:  # scan first 500 lines for component headers
-        m = _COMPONENT_PREFIX_RE.match(line)
-        if m:
-            comp = m.group(1).upper()
-            # Only count 2-letter codes that look like SWMF components
-            if len(comp) == 2 and comp.isalpha():
-                component_hits[comp] = component_hits.get(comp, 0) + 1
-    # Also scan the entire log for component name patterns
-    for m in _COMPONENT_HEADER_RE.finditer(text[:50_000]):
-        comp = m.group(1).upper()
-        if len(comp) == 2 and comp.isalpha():
-            component_hits[comp] = component_hits.get(comp, 0) + 1
+    component_hits: dict[str, int] = compact["component_hits"]
 
     if component_hits:
         active_components = sorted(component_hits, key=lambda c: -component_hits[c])[:8]
@@ -217,28 +619,19 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
         })
 
     # --- simulation time at last occurrence ---
-    sim_times: list[str] = []
-    for line in lines:
-        m = _SIM_TIME_RE.search(line)
-        if m:
-            sim_times.append(m.group(1))
-    if sim_times:
+    sim_times = compact["simulation_times"]
+    if sim_times["sample_count"]:
         findings.append({
             "kind": "simulation_time",
             "location": "log",
-            "description": f"Last simulation time seen: {sim_times[-1]} (first: {sim_times[0]})",
-            "first_time": sim_times[0],
-            "last_time": sim_times[-1],
-            "sample_count": len(sim_times),
+            "description": f"Last simulation time seen: {sim_times['last']} (first: {sim_times['first']})",
+            "first_time": sim_times["first"],
+            "last_time": sim_times["last"],
+            "sample_count": sim_times["sample_count"],
         })
 
     # --- MPI rank info (first few occurrences) ---
-    rank_samples: list[str] = []
-    for line in lines:
-        if _RANK_RE.search(line):
-            rank_samples.append(line.strip()[:120])
-        if len(rank_samples) >= 3:
-            break
+    rank_samples: list[str] = compact["rank_samples"]
     if rank_samples:
         findings.append({
             "kind": "mpi_rank_info",
@@ -248,7 +641,7 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
         })
 
     # --- warning count ---
-    warning_count = sum(1 for line in lines if _WARNING_RE.search(line))
+    warning_count = compact["warning_count"]
     if warning_count:
         findings.append({
             "kind": "warning_count",
@@ -257,16 +650,45 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
             "count": warning_count,
         })
 
+    if compact["diagnostics"]:
+        findings.append({
+            "kind": "diagnostic_summary",
+            "location": "log",
+            "description": f"{len(compact['diagnostics'])} diagnostic signature(s) retained after deduplication.",
+            "diagnostics": compact["diagnostics"],
+        })
+
+    progress = compact["progress"]
+    if progress["count"]:
+        findings.append({
+            "kind": "progress_summary",
+            "location": "log",
+            "description": (
+                f"{progress['count']} progress line(s); "
+                f"first step {progress['first']['step']} and last step {progress['last']['step']}."
+            ),
+            "count": progress["count"],
+            "first": progress["first"],
+            "last": progress["last"],
+        })
+
+    if compact["timing_blocks"] or compact["saved_outputs"]:
+        findings.append({
+            "kind": "runtime_output_summary",
+            "location": "log",
+            "description": "Timing blocks and saved-output messages summarized compactly.",
+            "timing_blocks": compact["timing_blocks"],
+            "saved_outputs": compact["saved_outputs"],
+        })
+
     # --- success / completion ---
-    for line in reversed(lines[-100:]):  # check last 100 lines
-        m = _SUCCESS_RE.search(line)
-        if m:
-            findings.append({
-                "kind": "run_completed",
-                "location": "log",
-                "description": f"Completion indicator found: {line.strip()[:120]}",
-            })
-            break
+    if compact["success_lines"]:
+        last_success = compact["success_lines"][-1]
+        findings.append({
+            "kind": "run_completed",
+            "location": f"line {last_success['line_number']}",
+            "description": f"Completion indicator found: {last_success['line'][:120]}",
+        })
 
     if not any(f["kind"] in ("first_error", "stacktrace", "run_completed") for f in findings):
         findings.append({
@@ -277,7 +699,7 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
 
     error_line = f"First error at line {first_error['line_number']}." if first_error.get("found") else "No errors found."
     comp_str = f" Components: {', '.join(active_components)}." if component_hits else ""
-    summary = f"Log file: {total_lines} lines. {error_line}{comp_str}" + (
+    summary = f"Log file: {total_lines} lines. Status: {compact['status']}. {error_line}{comp_str}" + (
         " Stacktrace detected." if stacktrace else ""
     )
     return summary, findings
@@ -286,6 +708,311 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
 # ---------------------------------------------------------------------------
 # param inspector
 # ---------------------------------------------------------------------------
+
+def _strip_inline_param_comment(line: str) -> str:
+    in_single_quote = False
+    in_double_quote = False
+    out_chars: list[str] = []
+    for ch in line:
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+        elif ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+        elif ch == "!" and not in_single_quote and not in_double_quote:
+            break
+        out_chars.append(ch)
+    return "".join(out_chars).rstrip()
+
+
+def _coerce_param_scalar(token: str) -> Any:
+    lower = token.lower()
+    if lower in {"t", ".true."}:
+        return True
+    if lower in {"f", ".false."}:
+        return False
+    try:
+        return int(token)
+    except ValueError:
+        pass
+    try:
+        return float(token)
+    except ValueError:
+        return token
+
+
+def _row_to_param_setting(row: str) -> dict[str, Any] | None:
+    tokens = row.split()
+    if len(tokens) < 2:
+        return None
+    key = tokens[-1]
+    if not _PARAM_SETTING_KEY_RE.match(key):
+        return None
+    value_tokens = tokens[:-1]
+    if not value_tokens:
+        return None
+    value: Any
+    if len(value_tokens) == 1:
+        value = _coerce_param_scalar(value_tokens[0])
+    else:
+        value = " ".join(value_tokens)
+    return {"key": key, "value": value, "raw": row}
+
+
+def _infer_required_components_from_sessions(sessions: list[Any]) -> list[str]:
+    required: list[str] = []
+    seen: set[str] = set()
+
+    def _add_component(comp: str) -> None:
+        comp_id = comp.strip().upper()
+        if len(comp_id) != 2 or comp_id in seen:
+            return
+        seen.add(comp_id)
+        required.append(comp_id)
+
+    for session in sessions:
+        for row in session.component_map_rows:
+            _add_component(str(row.get("component", "")))
+        for comp in session.component_blocks:
+            _add_component(comp)
+        for comp, _ in session.switched_components:
+            _add_component(comp)
+
+    return required
+
+
+def _parse_param_command_blocks(param_text: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    current_block: dict[str, Any] | None = None
+    session_index = 1
+    current_component: str | None = None
+
+    def _finish_current_block() -> None:
+        nonlocal current_block
+        if current_block is not None:
+            blocks.append(current_block)
+        current_block = None
+
+    for line_number, raw_line in enumerate(param_text.splitlines(), start=1):
+        cleaned = _strip_inline_param_comment(raw_line).strip()
+        if not cleaned:
+            continue
+
+        if cleaned.startswith("#"):
+            _finish_current_block()
+            command = cleaned.split()[0].upper()
+            current_block = {
+                "command": command,
+                "session_index": session_index,
+                "line_number": line_number,
+                "component": current_component,
+                "rows": [],
+            }
+
+            if command == "#RUN":
+                session_index += 1
+            elif command == "#END":
+                break
+
+            begin_match = _PARAM_BEGIN_COMPONENT_RE.match(cleaned)
+            if begin_match:
+                current_component = begin_match.group(1).upper()
+            end_match = _PARAM_END_COMPONENT_RE.match(cleaned)
+            if end_match:
+                current_component = None
+            continue
+
+        if current_block is not None:
+            current_block["rows"].append(cleaned)
+
+    _finish_current_block()
+    return blocks
+
+
+def _parse_saveplot_string_descriptor(value: str) -> dict[str, str | None]:
+    tokens = value.split()
+    if not tokens:
+        return {"plot_area": None, "plot_category": None, "plot_form": None}
+    if len(tokens) == 1:
+        return {"plot_area": tokens[0], "plot_category": None, "plot_form": None}
+    return {
+        "plot_area": tokens[0],
+        "plot_category": tokens[1] if len(tokens) >= 2 else None,
+        "plot_form": tokens[-1],
+    }
+
+
+def _extract_param_semantics(param_text: str, parsed: Any) -> dict[str, Any]:
+    command_blocks = _parse_param_command_blocks(param_text)
+
+    session_timeline: list[dict[str, Any]] = []
+    key_command_timeline: list[dict[str, Any]] = []
+    for session in parsed.sessions[:20]:
+        commands = [str(command).upper() for command in session.commands]
+        session_timeline.append({
+            "session_index": session.index,
+            "command_count": len(commands),
+            "commands": commands[:20],
+            "stop_present": session.stop_present,
+            "component_blocks": sorted(session.component_blocks),
+        })
+        for order, command in enumerate(commands, start=1):
+            if command not in _PARAM_TIMELINE_COMMANDS:
+                continue
+            if len(key_command_timeline) >= 80:
+                break
+            key_command_timeline.append({
+                "session_index": session.index,
+                "order": order,
+                "command": command,
+            })
+
+    control_blocks: list[dict[str, Any]] = []
+    control_values: dict[str, list[str]] = {}
+    for block in command_blocks:
+        command = str(block.get("command", ""))
+        if command not in _PARAM_CONTROL_COMMANDS or command == "#SAVEPLOT":
+            continue
+        settings = [
+            parsed_setting
+            for row in block.get("rows", [])
+            if (parsed_setting := _row_to_param_setting(str(row))) is not None
+        ]
+        if not settings and not block.get("rows"):
+            continue
+
+        for setting in settings:
+            key = str(setting.get("key", ""))
+            value_text = str(setting.get("value", ""))
+            values = control_values.setdefault(key, [])
+            if value_text not in values and len(values) < 4:
+                values.append(value_text)
+
+        control_blocks.append({
+            "command": command,
+            "session_index": block.get("session_index"),
+            "component": block.get("component"),
+            "line_number": block.get("line_number"),
+            "settings": settings[:20],
+            "raw_rows": [str(row) for row in block.get("rows", [])[:20]],
+        })
+
+    control_summary = [
+        {"key": key, "values": values}
+        for key, values in sorted(control_values.items())
+    ]
+
+    saveplot_blocks: list[dict[str, Any]] = []
+    for block in command_blocks:
+        if block.get("command") != "#SAVEPLOT":
+            continue
+
+        declared_plot_count: int | None = None
+        global_cadence: dict[str, Any] = {}
+        block_options: dict[str, Any] = {}
+        entries: list[dict[str, Any]] = []
+        current_entry: dict[str, Any] | None = None
+        unparsed_rows: list[str] = []
+
+        for row in block.get("rows", []):
+            row_text = str(row)
+            setting = _row_to_param_setting(row_text)
+            if setting is None:
+                unparsed_rows.append(row_text)
+                continue
+
+            key = str(setting["key"])
+            value = setting["value"]
+            value_text = str(value)
+
+            if key in _PARAM_SAVE_COUNT_KEYS:
+                if declared_plot_count is None:
+                    parsed_count: int | None = None
+                    if isinstance(value, int):
+                        parsed_count = value
+                    else:
+                        try:
+                            parsed_count = int(float(value_text))
+                        except ValueError:
+                            parsed_count = None
+                    declared_plot_count = parsed_count
+                block_options[key] = value
+                continue
+
+            if key == "StringPlot":
+                if current_entry is not None:
+                    entries.append(current_entry)
+                descriptor = _parse_saveplot_string_descriptor(value_text)
+                current_entry = {
+                    "string_plot": value_text,
+                    "plot_area": descriptor.get("plot_area"),
+                    "plot_category": descriptor.get("plot_category"),
+                    "plot_form": descriptor.get("plot_form"),
+                    "cadence": {},
+                    "name_vars": [],
+                    "name_pars": [],
+                    "options": {},
+                }
+                continue
+
+            if key in _PARAM_SAVE_CADENCE_KEYS:
+                if current_entry is not None:
+                    current_entry["cadence"][key] = value
+                else:
+                    global_cadence[key] = value
+                continue
+
+            if key == "NameVars":
+                vars_tokens = value_text.split()
+                if current_entry is not None:
+                    current_entry["name_vars"] = vars_tokens[:40]
+                else:
+                    block_options["NameVars"] = vars_tokens[:40]
+                continue
+
+            if key == "NamePars":
+                pars_tokens = value_text.split()
+                if current_entry is not None:
+                    current_entry["name_pars"] = pars_tokens[:40]
+                else:
+                    block_options["NamePars"] = pars_tokens[:40]
+                continue
+
+            if current_entry is not None:
+                current_entry["options"][key] = value
+            else:
+                block_options[key] = value
+
+        if current_entry is not None:
+            entries.append(current_entry)
+
+        if global_cadence and entries:
+            for entry in entries:
+                cadence = entry.setdefault("cadence", {})
+                for cadence_key, cadence_value in global_cadence.items():
+                    cadence.setdefault(cadence_key, cadence_value)
+
+        saveplot_blocks.append({
+            "session_index": block.get("session_index"),
+            "component": block.get("component"),
+            "line_number": block.get("line_number"),
+            "declared_plot_count": declared_plot_count,
+            "entry_count": len(entries),
+            "plot_forms": sorted({str(entry.get("plot_form")) for entry in entries if entry.get("plot_form")}),
+            "plot_areas": sorted({str(entry.get("plot_area")) for entry in entries if entry.get("plot_area")}),
+            "shared_cadence": global_cadence,
+            "entries": entries[:12],
+            "options": block_options,
+            "unparsed_rows": unparsed_rows[:20],
+        })
+
+    return {
+        "session_timeline": session_timeline,
+        "key_command_timeline": key_command_timeline,
+        "control_command_blocks": control_blocks,
+        "control_summary": control_summary,
+        "saveplot_blocks": saveplot_blocks,
+    }
+
 
 def _inspect_param(
     path_str: str,
@@ -325,22 +1052,11 @@ def _inspect_param(
     for session in parsed.sessions:
         all_component_map_rows.extend(session.component_map_rows)
 
-    # Required components
-    required_components: list[str] = []
-    seen_comps: set[str] = set()
-    for session in parsed.sessions:
-        for row in session.component_map_rows:
-            comp = str(row.get("component", "")).strip().upper()
-            if len(comp) == 2 and comp not in seen_comps:
-                seen_comps.add(comp)
-                required_components.append(comp)
-        for comp in session.component_blocks:
-            comp_id = comp.strip().upper()
-            if len(comp_id) == 2 and comp_id not in seen_comps:
-                seen_comps.add(comp_id)
-                required_components.append(comp_id)
+    required_components = _infer_required_components_from_sessions(parsed.sessions)
 
     n_sessions = len(parsed.sessions)
+    param_semantics = _extract_param_semantics(text, parsed)
+    saveplot_blocks = param_semantics.get("saveplot_blocks", [])
 
     # Build findings
     findings: list[dict[str, Any]] = []
@@ -350,6 +1066,9 @@ def _inspect_param(
     focus_compmap = any(tok in q_lower for tok in ("component map", "componentmap", "#componentmap"))
     focus_validate = any(tok in q_lower for tok in ("validate", "validation", "testparam"))
     focus_external = any(tok in q_lower for tok in ("external", "external ref", "file ref"))
+    focus_timeline = any(tok in q_lower for tok in ("session", "timeline", "run phases", "phase"))
+    focus_control = any(tok in q_lower for tok in ("control", "timeaccurate", "stop", "couple", "cadence"))
+    focus_saveplot = any(tok in q_lower for tok in ("saveplot", "#saveplot", "stringplot", "outs", "plot"))
 
     # Always add structure finding
     findings.append({
@@ -375,6 +1094,37 @@ def _inspect_param(
             "location": path_str,
             "description": f"Commands per session (first {min(n_sessions, 5)}).",
             "commands_by_session": commands_by_session,
+        })
+    if param_semantics["session_timeline"] or focus_timeline:
+        findings.append({
+            "kind": "param_session_timeline",
+            "location": path_str,
+            "description": (
+                f"Session timeline extracted for {len(param_semantics['session_timeline'])} session(s). "
+                f"{len(param_semantics['key_command_timeline'])} key command event(s)."
+            ),
+            "sessions": param_semantics["session_timeline"][:12],
+            "key_command_timeline": param_semantics["key_command_timeline"][:60],
+        })
+
+    if param_semantics["control_summary"] or focus_control:
+        findings.append({
+            "kind": "param_control_settings",
+            "location": path_str,
+            "description": (
+                f"{len(param_semantics['control_command_blocks'])} control-command block(s) "
+                f"with {len(param_semantics['control_summary'])} key setting(s)."
+            ),
+            "control_settings": param_semantics["control_summary"][:40],
+            "control_command_blocks": param_semantics["control_command_blocks"][:20],
+        })
+
+    if saveplot_blocks or focus_saveplot:
+        findings.append({
+            "kind": "param_saveplot_blocks",
+            "location": path_str,
+            "description": f"{len(saveplot_blocks)} #SAVEPLOT block(s) parsed.",
+            "saveplot_blocks": saveplot_blocks[:20],
         })
 
     # Include files
@@ -434,7 +1184,16 @@ def _inspect_param(
 
     # Evidence from question
     evidence: list[dict[str, Any]] = []
-    if question and not focus_includes and not focus_compmap and not focus_validate:
+    if question and not any(
+        (
+            focus_includes,
+            focus_compmap,
+            focus_validate,
+            focus_timeline,
+            focus_control,
+            focus_saveplot,
+        )
+    ):
         raw = ks.search_source(
             swmf_root,
             query=question,
@@ -447,7 +1206,8 @@ def _inspect_param(
     summary = (
         f"PARAM.in at '{path_str}': {n_sessions} session(s), "
         f"{len(required_components)} component(s) ({', '.join(required_components) or 'none'}), "
-        f"{len(missing_includes)} missing include(s)."
+        f"{len(missing_includes)} missing include(s), "
+        f"{len(saveplot_blocks)} #SAVEPLOT block(s)."
     )
     return summary, findings, evidence
 
@@ -620,9 +1380,27 @@ def _build_run_dir_not_found_finding(
 
     candidates = guidance.get("path_search_candidates", [])
     if isinstance(candidates, list):
+        swmf_workspace = Path(swmf_root).resolve().parent
+        requested_name = raw_path.name.lower()
+
+        def _candidate_rank(candidate: str) -> tuple[bool, bool, bool, str]:
+            candidate_path = Path(candidate).resolve()
+            under_workspace = False
+            try:
+                candidate_path.relative_to(swmf_workspace)
+                under_workspace = True
+            except ValueError:
+                pass
+            return (
+                not under_workspace,
+                requested_name not in str(candidate_path).lower(),
+                not _has_expected_run_entry(candidate),
+                str(candidate_path),
+            )
+
         candidates = sorted(
             (str(candidate) for candidate in candidates),
-            key=lambda candidate: (not _has_expected_run_entry(candidate), candidate),
+            key=_candidate_rank,
         )
         guidance["path_search_candidates"] = candidates
 
@@ -783,6 +1561,56 @@ def _inspect_run_dir(
         "run_status": run_status,
     })
 
+    param_status = "missing"
+    param_path = p / "PARAM.in"
+    if param_path.is_file():
+        param_text, param_err = _read_file_safe(str(param_path))
+        if param_err or param_text is None:
+            param_status = "unreadable"
+            findings.append({
+                "kind": "run_dir_param_unreadable",
+                "location": str(param_path),
+                "description": param_err or "PARAM.in exists but could not be read.",
+            })
+        else:
+            parsed_param = parse_param_text(param_text)
+            required_components = _infer_required_components_from_sessions(parsed_param.sessions)
+            param_semantics = _extract_param_semantics(param_text, parsed_param)
+            saveplot_blocks = param_semantics.get("saveplot_blocks", [])
+            param_status = "parsed"
+
+            findings.append({
+                "kind": "run_dir_param_summary",
+                "location": str(param_path),
+                "description": (
+                    f"PARAM.in parsed: {len(parsed_param.sessions)} session(s), "
+                    f"{len(required_components)} component(s), "
+                    f"{len(saveplot_blocks)} #SAVEPLOT block(s)."
+                ),
+                "param_path": str(param_path),
+                "session_count": len(parsed_param.sessions),
+                "required_components": required_components,
+                "session_timeline": param_semantics["session_timeline"][:8],
+                "key_command_timeline": param_semantics["key_command_timeline"][:24],
+                "control_settings": param_semantics["control_summary"][:20],
+                "saveplot_block_count": len(saveplot_blocks),
+                "parser_errors": parsed_param.errors[:10],
+                "parser_warnings": parsed_param.warnings[:10],
+            })
+
+            findings.append({
+                "kind": "run_dir_param_saveplot",
+                "location": str(param_path),
+                "description": f"Saved-plot settings extracted from {len(saveplot_blocks)} #SAVEPLOT block(s).",
+                "saveplot_blocks": saveplot_blocks[:8],
+            })
+    else:
+        findings.append({
+            "kind": "run_dir_param_missing",
+            "location": str(param_path),
+            "description": "PARAM.in is missing from this run directory.",
+        })
+
     # --- Log file discovery and first-error preview ---
     log_candidates: list[Path] = []
     for pattern in ["runlog*", "*.log", "*.out"]:
@@ -791,26 +1619,42 @@ def _inspect_run_dir(
 
     if log_candidates:
         primary_log = log_candidates[0]
-        try:
-            log_text = primary_log.read_text(encoding="utf-8", errors="replace")[:_MAX_FILE_CHARS]
-            first_error = _extract_first_error_payload(log_text)
-            log_lines = len(log_text.splitlines())
-        except OSError:
+        log_compact, log_error = _stream_log_summary(str(primary_log))
+        if log_compact is None:
             first_error = {"found": False}
             log_lines = 0
+            log_status = "unknown"
+            log_bytes = None
+        else:
+            first_error = log_compact["first_error"]
+            log_lines = log_compact["line_count"]
+            log_status = log_compact["status"]
+            log_bytes = log_compact.get("bytes")
 
         log_finding: dict[str, Any] = {
             "kind": "log_discovery",
             "location": str(primary_log),
             "description": (
-                f"Primary log: {primary_log.name} ({log_lines} lines). "
+                f"Primary log: {primary_log.name} ({log_lines} lines"
+                + (f", {log_bytes} bytes" if log_bytes is not None else "")
+                + f", status={log_status}). "
                 + (f"First error at line {first_error['line_number']}." if first_error.get("found") else "No errors detected.")
             ),
             "log_files": [str(lf) for lf in log_candidates],
             "primary_log": str(primary_log),
+            "status": log_status,
+            "line_count": log_lines,
+            "bytes": log_bytes,
         }
+        if log_error:
+            log_finding["read_error"] = log_error
         if first_error.get("found"):
             log_finding["first_error"] = first_error
+        if log_compact is not None:
+            log_finding["tail_lines"] = log_compact["tail_lines"]
+            log_finding["tail_omitted_low_signal_lines"] = log_compact["tail_omitted_low_signal_lines"]
+            log_finding["diagnostics"] = log_compact["diagnostics"][:8]
+            log_finding["progress"] = log_compact["progress"]
         findings.append(log_finding)
 
     # --- Job script detection ---
@@ -870,6 +1714,7 @@ def _inspect_run_dir(
     summary = (
         f"Run directory '{path_str}': {len(files_found)} items. "
         f"Status: {run_status}. "
+        f"PARAM.in: {param_status}. "
         f"Logs: {len(log_candidates)}. "
         f"Job scripts: {len(job_scripts)}."
     )
@@ -1311,9 +2156,9 @@ def inspect_artifact(
 
     Phase 4 specialized inspectors:
     - log: error/stacktrace + component detection + simulation time + MPI rank info
-    - param: full structure (sessions, component map, includes, external refs) + question dispatch
+    - param: structure + session timeline + control settings + #SAVEPLOT extraction
     - xml: command listing from PARAM.XML parser + command search
-    - run_dir: artifact presence + log discovery + job scripts + output subdirs
+    - run_dir: artifact presence + PARAM.in summary + log discovery + job scripts + output subdirs
     - build_output: SWMF root markers (dir) or compile/linker errors (file)
     - result: file type detection (binary vs SWMF text output) + structured header parsing
     """
@@ -1404,9 +2249,10 @@ def register(app: Any) -> None:
             "before calling get_evidence. "
             "Specialized inspectors: log detects first error, stacktrace, components, "
             "simulation time; param extracts sessions, component map, includes, external "
-            "refs; xml lists commands from PARAM.XML; run_dir checks artifact presence "
-            "(SWMF.SUCCESS/DONE), discovers logs with first-error, and finds job scripts; "
-            "build_output checks SWMF root markers or compile/linker errors; result "
-            "detects binary vs text format and previews structured SWMF output headers."
+            "refs, command timeline, control settings, and #SAVEPLOT blocks; xml lists "
+            "commands from PARAM.XML; run_dir checks artifact presence (SWMF.SUCCESS/DONE), "
+            "summarizes PARAM.in intent, discovers logs with first-error, and finds job "
+            "scripts; build_output checks SWMF root markers or compile/linker errors; "
+            "result detects binary vs text format and previews structured SWMF output headers."
         )
     )(inspect_artifact)

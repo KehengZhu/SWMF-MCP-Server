@@ -46,6 +46,15 @@ inspect_artifact(
 )
 ```
 
+For run-level PARAM intent from an existing case:
+```
+inspect_artifact(
+  artifact_type = "run_dir",
+  path = <run_dir_path>,
+  question = "summarize PARAM sessions, control settings, and SAVEPLOT cadence"
+)
+```
+
 For source behavior (schema vs runtime divergence):
 ```
 get_evidence(

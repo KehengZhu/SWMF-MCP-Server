@@ -122,7 +122,7 @@ _STACK_PATTERNS = [
         r"backtrace",
         r"program received signal",
         r"^\s*#\d+",
-        r"\bat\s+.*:\d+",
+        r"^\s*at\s+\S.*(?::\d+|\([^)]*\))",
         r"call stack",
     ]
 ]

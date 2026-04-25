@@ -63,6 +63,17 @@ tools above for all agent-facing retrieval and artifact inspection.
 6. **Do not let heuristic evidence override** validators, `PARAM.XML`, or
    `TestParam.pl` output.
 
+## Runlog discipline
+
+Do not directly read a whole `runlog*`, `.stdout`, `.stderr`, or large runtime
+`.log` file unless the user explicitly asks for raw log content. Runtime logs
+must be compacted through `inspect_artifact(artifact_type="log"|"run_dir", ...)`
+or compared through `compare_artifacts` first.
+
+After the tool response, direct reads are allowed only as bounded follow-up:
+specific line ranges, `rg` for named diagnostics, or short `head`/`tail`
+windows needed to verify a finding.
+
 ---
 
 ## Mandatory pre-search gate

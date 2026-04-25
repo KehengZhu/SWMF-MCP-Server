@@ -28,6 +28,8 @@ description: "Use when something is broken or suspicious: run crash, wrong resul
    inspect_artifact(artifact_type="run_dir", path=<run_dir>)  # layout/startup
    ```
    Read `findings`. Identify the failure family.
+   Do not directly read whole runlogs unless the user explicitly requests raw
+   log content; use only bounded follow-up excerpts after `inspect_artifact`.
 
 2. **Cross-component orientation** (only if failure spans components):
    ```

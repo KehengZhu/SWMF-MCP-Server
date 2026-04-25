@@ -24,7 +24,9 @@ description: "Use when the task is about how to execute a SWMF simulation: launc
 1. `get_evidence(query=<run goal>, task_type="run", goal=<run goal>)`
    — launch scripts, restart scripts, pre-run entrypoints
 2. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
-   — run directory layout and readiness check
+   — run directory layout/readiness plus PARAM-derived run intent
+   — compact runlog status when logs are present; do not directly read whole
+     runlogs unless the user explicitly asks for raw log content
 3. `get_evidence(mode="keyword", goal="run environment or job script")`
    — for specific run flags or cluster submission patterns
 4. PARAM validation before launch:
@@ -46,5 +48,9 @@ description: "Use when the task is about how to execute a SWMF simulation: launc
   * `metadata.relative_path`
   * `metadata.why_relevant`
 * run directory readiness findings when `inspect_artifact` was called
+* PARAM-derived findings from run-dir inspection:
+  * session timeline and key commands
+  * control settings (`#STOP`, cadence, coupling controls)
+  * `#SAVEPLOT` essentials (`StringPlot`, cadence, saved variables)
 * DO NOT invent shell commands from heuristic evidence; state affordances only
 * if validation has not been done, say so

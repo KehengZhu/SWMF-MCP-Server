@@ -29,6 +29,8 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
    )
    ```
    Read `differences` for structural/value changes.
+   Do not directly read whole runlogs unless the user explicitly requests raw
+   log content; use bounded excerpts only after tool output names a need.
 
 2. **Inspect the anomalous side** (if one side has errors or a crash):
    ```

@@ -412,6 +412,77 @@ class TestInspectArtifact:
         result = self._call(artifact_type="log", path="some/path")
         assert result["question"] == ""
 
+    def test_log_inspection_streams_full_log_past_front_cap(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "runtime-transcript.txt"
+        progress_lines = [
+            f"Progress:  {500000 + i * 10} steps,  {54000.0 + i:.6E} s simulation time,   {1000.0 + i:.2f} s CPU time, Date: 20240801_151250\n"
+            for i in range(3500)
+        ]
+        log_path.write_text(
+            "TACC: Starting parallel tasks\n"
+            + "".join(progress_lines)
+            + "    Finished Numerical Simulation\n"
+            + "    Finished Finalizing SWMF\n"
+            + "TACC:  Shutdown complete. Exiting.\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(artifact_type="log", path=str(log_path))
+
+        compaction = next(item for item in result["findings"] if item["kind"] == "log_compaction")
+        status = next(item for item in result["findings"] if item["kind"] == "run_status")
+        progress = next(item for item in result["findings"] if item["kind"] == "progress_summary")
+        assert compaction["line_count"] == 3504
+        assert compaction["bytes"] > 200_000
+        assert len(compaction["tail_lines"]) <= 24
+        assert status["status"] == "completed"
+        assert progress["count"] == 3500
+        assert any(item["kind"] == "run_completed" for item in result["findings"])
+
+    def test_log_inspection_deduplicates_repeated_mpi_rank_errors(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "runtime-transcript.txt"
+        repeated = "\n".join(
+            [
+                f"Error in component SC in session  1\n ERROR: aborting execution on processor {rank:4d}  with message:\nERROR: Fix #STARTTIME command in PARAM.in"
+                for rank in range(100)
+            ]
+        )
+        log_path.write_text(repeated + "\nTACC:  MPI job exited with code: 1\n", encoding="utf-8")
+
+        result = self._call(artifact_type="log", path=str(log_path))
+
+        status = next(item for item in result["findings"] if item["kind"] == "run_status")
+        first_error = next(item for item in result["findings"] if item["kind"] == "first_error")
+        diagnostics = next(item for item in result["findings"] if item["kind"] == "diagnostic_summary")
+        assert status["status"] == "failed"
+        assert "Fix #STARTTIME" in first_error["description"]
+        assert any(
+            item["count"] == 100 and "Fix #STARTTIME" in item["pattern"]
+            for item in diagnostics["diagnostics"]
+        )
+
+    def test_run_dir_log_discovery_uses_full_log_stream(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        run_dir.mkdir(parents=True)
+        (run_dir / "runlog").write_text(
+            "".join(
+                f"Progress:  {i} steps,  {float(i):.6E} s simulation time,   {float(i):.2f} s CPU time, Date: 20240801_151250\n"
+                for i in range(3500)
+            )
+            + "Finished Finalizing SWMF\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(artifact_type="run_dir", path=str(run_dir), swmf_root=str(swmf_root))
+
+        log_finding = next(item for item in result["findings"] if item["kind"] == "log_discovery")
+        assert log_finding["line_count"] == 3501
+        assert log_finding["bytes"] > 200_000
+        assert log_finding["status"] == "completed"
+        assert log_finding["progress"]["count"] == 3500
+
     def test_run_dir_not_found_returns_swmfsolar_path_candidates(
         self,
         tmp_path: Path,
@@ -504,6 +575,89 @@ class TestInspectArtifact:
         assert group["middle_frame"] == "z=0_var_3_t00030000_n00007500.out"
         assert group["last_frame"] == "z=0_var_3_t00040000_n00010000.out"
         assert group["middle_frame_path"].endswith("z=0_var_3_t00030000_n00007500.out")
+
+    def test_run_dir_includes_param_summary_and_saveplot_findings(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        (run_dir / "IH").mkdir(parents=True)
+        (run_dir / "PARAM.in").write_text(
+            "\n".join(
+                [
+                    "#TIMEACCURATE",
+                    "T DoTimeAccurate",
+                    "#COMPONENTMAP",
+                    "IH 0 3 1",
+                    "#SAVEPLOT",
+                    "2 nPlotFile",
+                    "z=0 VAR idl StringPlot",
+                    "-1 DnSavePlot",
+                    "600.0 DtSavePlot",
+                    "{MHD} bx by NameVars",
+                    "{default} NamePars",
+                    "x=0 VAR ascii StringPlot",
+                    "-1 DnSavePlot",
+                    "1200.0 DtSavePlot",
+                    "ux uy NameVars",
+                    "#STOP",
+                    "-1 MaxIter",
+                    "4 h TimeMax",
+                    "#RUN",
+                    "#STOP",
+                    "-1 MaxIter",
+                    "8 h TimeMax",
+                    "#END",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self._call(
+            artifact_type="run_dir",
+            path=str(run_dir),
+            question="summarize saveplot cadence and run sessions",
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        summary_finding = next(item for item in result["findings"] if item["kind"] == "run_dir_param_summary")
+        assert summary_finding["session_count"] == 2
+        assert summary_finding["saveplot_block_count"] == 1
+        assert "IH" in summary_finding["required_components"]
+        assert any(item["key"] == "TimeMax" for item in summary_finding["control_settings"])
+        assert any(item["command"] == "#SAVEPLOT" for item in summary_finding["key_command_timeline"])
+
+        saveplot_finding = next(item for item in result["findings"] if item["kind"] == "run_dir_param_saveplot")
+        saveplot_block = saveplot_finding["saveplot_blocks"][0]
+        assert saveplot_block["declared_plot_count"] == 2
+        assert saveplot_block["entry_count"] == 2
+        assert saveplot_block["plot_forms"] == ["ascii", "idl"]
+
+        first_entry = saveplot_block["entries"][0]
+        assert first_entry["plot_area"] == "z=0"
+        assert first_entry["plot_form"] == "idl"
+        assert first_entry["cadence"]["DtSavePlot"] == 600.0
+        assert "bx" in first_entry["name_vars"]
+
+    def test_run_dir_explicitly_reports_missing_param_in_file(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        ih_dir = run_dir / "IH"
+        ih_dir.mkdir(parents=True)
+        (ih_dir / "z=0_var_3_t0001.out").write_text("x y z bx by\n", encoding="utf-8")
+
+        result = self._call(
+            artifact_type="run_dir",
+            path=str(run_dir),
+            swmf_root=str(swmf_root),
+        )
+
+        _assert_base_output_contract(result, "inspect_artifact")
+        missing_param = next(item for item in result["findings"] if item["kind"] == "run_dir_param_missing")
+        assert missing_param["location"].endswith("PARAM.in")
+        assert "missing" in missing_param["description"].lower()
 
     def test_result_extracts_binary_idl_plot_header(self, tmp_path: Path) -> None:
         swmf_root = self._make_fake_swmf_root(tmp_path)

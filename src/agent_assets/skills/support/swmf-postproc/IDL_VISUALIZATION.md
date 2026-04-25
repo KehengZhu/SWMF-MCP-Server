@@ -83,13 +83,16 @@ graphics:
 
 1. Inspect the named run directory or result file with MCP. Use the evidence only
    to identify the artifact, variables, frame groups, and first/middle/last
-   frames; do not manually reconstruct the plotted data unless IDL cannot run.
+   frames (`first_frame`, `middle_frame`, `last_frame`); do not manually
+   reconstruct the plotted data unless IDL cannot run.
 2. Retrieve deterministic IDL evidence for the chosen SWMF entrypoint and for
    `func`, `plotmode`, and `export`.
 3. Create an `analysis/` directory next to the relevant output files and write a
    case-local `.pro` command script there. Put local plot choices near the top:
    `workdir`, `files`, `func`, `plotmode`, `plottitle`, `outbase`,
    `autorange`, `showxtitle`, and `showytitle`.
+   For Codex-generated exports, prefer a command-style `analysis/<name>.pro`
+   driver over a reusable procedure unless arguments or reuse are required.
    The script should be a macro driver that sets documented variables and then
    calls `read_data`, `plot_data`, `show_data`, `animate_data`,
    `plot_log_data`, or `slice_data`.
@@ -102,12 +105,16 @@ graphics:
    direct graphics (`contour`, `vector`, `triangulate`, `tvrd`, custom readers)
    as a last resort after IDL macro execution fails or evidence shows the SWMF
    macros cannot express the requested output, and the user explicitly accepts
-   that fallback. Do not check for Python plotting libraries before trying the
+   that fallback; do not hand-write
+   binary readers or direct graphics before the macro path fails. Do not check for Python plotting libraries before trying the
    IDL path.
 
 Assume `idl` is the preferred deployed renderer for IDL visualization tasks. Do
 not spend the main workflow proving IDL installation up front; if execution
 fails, inspect the log and then check `IDL_PATH`, `IDL_STARTUP`, and `idlrc`.
+Use `retall` only as an interactive recovery command after a failed nested IDL
+macro leaves the prompt inside a procedure. Use `set_default_values` to restore
+SWMF IDL defaults before rerunning a macro in the same session.
 
 ## Workflow Policy
 
@@ -252,7 +259,9 @@ For reusable IDL scripts:
 
 State that `u` is the IDL speed function from `funcdef`, while `Bx` and `By`
 are header variables from the IH z=0 files. Mention
-`plotmode='contbar ovelovect'` only as a denser vector alternative.
+`func='u bx;by'` with `plotmode='contbar streamoverbody'` for the standard
+speed-plus-Bx/By streamline example. Mention `plotmode='contbar ovelovect'`
+only as a denser vector alternative.
 For three selected frames, prefer the `files` loop with `read_data` and
 `plot_data`; for a full series, use the `.outs` file with `animate_data`.
 
