@@ -108,6 +108,49 @@ def test_idl_animation_playbook_documents_out_to_outs_workflow() -> None:
     assert "SWMFSOLAR/Run_Max_RP_CME3/run01" in postproc_text
 
 
+def test_run_dir_postprocessing_skills_require_inspection_first() -> None:
+    analyze_text = (_skills_root() / "swmf-analyze" / "SKILL.md").read_text(encoding="utf-8")
+    postproc_text = (_skills_root() / "support" / "swmf-postproc" / "SKILL.md").read_text(encoding="utf-8")
+
+    for text in (analyze_text, postproc_text):
+        assert 'inspect_artifact(artifact_type="run_dir"' in text
+        assert "run_dir_layout" in text
+        assert "postproc_state" in text
+        assert "component_artifact_inventory" in text
+        assert "restart_inventory" in text
+        assert "component_output_artifacts" in text
+        assert 'inspect_artifact(artifact_type="runlog"' in text
+        assert "common command-line tools" in text
+        assert "Do not directly read runlogs" in text or "do not directly read whole runlogs" in text
+
+    assert "read the whole run-local `PARAM.in` yourself" in analyze_text
+    assert "read the run-local `PARAM.in` completely" in analyze_text
+
+    assert "Clear runtime failures belong to `swmf-debug`" in postproc_text
+    assert "`swmf-debug`" in analyze_text
+
+
+def test_postproc_skill_documents_script_launch_directory() -> None:
+    postproc_text = (_skills_root() / "support" / "swmf-postproc" / "SKILL.md").read_text(encoding="utf-8")
+
+    required_terms = [
+        "Both `PostProc.pl` and `Restart.pl` are copied into an SWMF run directory",
+        "executed from that run directory",
+        "Do not run either script\nfrom `RESULTS/<name>/`, a component directory, the SWMF source tree, or\n`share/Scripts`",
+        'Call `inspect_artifact(artifact_type="run_dir", path=<path>)`',
+        "If the inspected path is `postprocessed_results_tree`, `restart_tree`, or\n   `component_dir`, do not treat it as the command cwd",
+        "Prefer the run-local copied scripts: `./PostProc.pl` and `./Restart.pl`",
+        "`cd <run_dir> && ./PostProc.pl`",
+        "`cd <run_dir> && ./PostProc.pl -M -cat RESULTS/<name>`",
+        "`cd <run_dir> && ./Restart.pl -c`",
+        "`cd <run_dir> && ./Restart.pl`",
+        "`cd <new_run_dir> && ./Restart.pl -i <restart_tree>`",
+        "It does\nnot edit `PARAM.in`",
+    ]
+    for term in required_terms:
+        assert term in postproc_text
+
+
 def test_idl_playbook_documents_full_postprocessing_policy() -> None:
     playbook_text = (
         _skills_root() / "support" / "swmf-postproc" / "IDL_VISUALIZATION.md"
@@ -187,9 +230,8 @@ def test_idl_playbook_requires_idl_first_export_workflow() -> None:
         "hand-written IDL\n   direct graphics",
         "do not hand-write\n   binary readers or direct graphics",
         "Do not check for Python plotting libraries before trying the\n   IDL path",
-        "first_frame",
-        "middle_frame",
-        "last_frame",
+        "example filenames",
+        "Never\n   open or parse SWMF output files with common command-line tools",
         "magick -density 180 input.ps -background white -alpha remove input.png",
         "`convert` only if `magick` is unavailable",
         "For Codex-generated exports, prefer a command-style `analysis/<name>.pro`",

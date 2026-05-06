@@ -398,7 +398,7 @@ class TestInspectArtifact:
         assert "path" in result["provenance"]
 
     def test_valid_artifact_types(self) -> None:
-        for at in ("log", "param", "xml", "run_dir", "build_output", "result"):
+        for at in ("log", "runlog", "param", "xml", "run_dir", "build_output", "result"):
             result = self._call(artifact_type=at, path="some/path")
             assert result["artifact_type"] == at
 
@@ -483,6 +483,38 @@ class TestInspectArtifact:
         assert log_finding["status"] == "completed"
         assert log_finding["progress"]["count"] == 3500
 
+    def test_run_dir_log_discovery_prefers_latest_runlog_and_ignores_data_out(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        run_dir.mkdir(parents=True)
+        (run_dir / "PARAM.in").write_text("#DESCRIPTION\nsynthetic run\n", encoding="utf-8")
+        (run_dir / "runlog_2603121545").write_text(
+            "ERROR: aborting execution on processor 1 with message:\n"
+            "ERROR: old failed attempt\n"
+            "TACC: MPI job exited with code: 1\n",
+            encoding="utf-8",
+        )
+        (run_dir / "runlog_2603161512").write_text(
+            "Progress:  10 steps,  1.000000E+01 s simulation time,   1.00 s CPU time, Date: 20240801_150400\n"
+            "Finished Finalizing SWMF\n"
+            "TACC: Shutdown complete. Exiting.\n",
+            encoding="utf-8",
+        )
+        (run_dir / "harmonics_bxyz.out").write_text("1 2 3 4 5\n", encoding="utf-8")
+
+        result = self._call(artifact_type="run_dir", path=str(run_dir), swmf_root=str(swmf_root))
+
+        status_finding = next(item for item in result["findings"] if item["kind"] == "artifact_presence")
+        log_finding = next(item for item in result["findings"] if item["kind"] == "log_discovery")
+        assert status_finding["marker_run_status"] == "prepared_or_running"
+        assert status_finding["run_status"] == "completed"
+        assert result["summary"].count("Logs: 2") == 1
+        assert log_finding["primary_log"].endswith("runlog_2603161512")
+        assert log_finding["status"] == "completed"
+        assert len(log_finding["log_files"]) == 2
+        assert all(not item.endswith("harmonics_bxyz.out") for item in log_finding["log_files"])
+
     def test_run_dir_not_found_returns_swmfsolar_path_candidates(
         self,
         tmp_path: Path,
@@ -531,20 +563,15 @@ class TestInspectArtifact:
         )
 
         _assert_base_output_contract(result, "inspect_artifact")
-        finding = next(
-            item
-            for item in result["findings"]
-            if item["kind"] == "component_output_files" and item["component"] == "IH"
-        )
-        assert finding["patterns"]["z=0*.out"]["count"] == 2
-        assert "z=0_var_3_t0001.out" in finding["patterns"]["z=0*.out"]["samples"]
-        group = next(item for item in finding["snapshot_groups"] if item["pattern"] == "z=0_var_3_t*.out")
-        assert group["combined_outs"] == "z=0_var_3.outs"
-        assert group["combined_outs_exists"] is False
-        assert group["first_frame"] == "z=0_var_3_t0001.out"
-        assert group["middle_frame"] == "z=0_var_3_t0002.out"
-        assert group["last_frame"] == "z=0_var_3_t0002.out"
-        assert group["first_frame_path"].endswith("z=0_var_3_t0001.out")
+        finding = next(item for item in result["findings"] if item["kind"] == "component_output_artifacts")
+        group = finding["entries"][0]
+        assert group["component"] == "IH"
+        assert group["pattern"] == "z=0_var_3_t*.out"
+        assert group["raw_frame_count"] == 2
+        assert group["combined_outs_present"] is False
+        assert group["example_files"] == ["z=0_var_3_t0001.out", "z=0_var_3_t0002.out"]
+        assert group["plot_area"] is None
+        assert group["plot_form"] is None
 
     def test_run_dir_groups_timestep_and_iteration_snapshot_names(self, tmp_path: Path) -> None:
         workspace = tmp_path / "workspace"
@@ -565,16 +592,16 @@ class TestInspectArtifact:
         )
 
         _assert_base_output_contract(result, "inspect_artifact")
-        finding = next(item for item in result["findings"] if item["kind"] == "component_output_files")
-        group = next(item for item in finding["snapshot_groups"] if item["base"] == "z=0_var_3")
+        finding = next(item for item in result["findings"] if item["kind"] == "component_output_artifacts")
+        group = next(item for item in finding["entries"] if item["pattern"] == "z=0_var_3_t*_n*.out")
         assert group["pattern"] == "z=0_var_3_t*_n*.out"
-        assert group["count"] == 3
-        assert group["expected_outs"] == "z=0_var_3.outs"
-        assert group["combined_outs_exists"] is True
-        assert group["first_frame"] == "z=0_var_3_t00020000_n00005000.out"
-        assert group["middle_frame"] == "z=0_var_3_t00030000_n00007500.out"
-        assert group["last_frame"] == "z=0_var_3_t00040000_n00010000.out"
-        assert group["middle_frame_path"].endswith("z=0_var_3_t00030000_n00007500.out")
+        assert group["raw_frame_count"] == 3
+        assert group["combined_outs_present"] is True
+        assert group["combined_outs"] == "z=0_var_3.outs"
+        assert group["example_files"] == [
+            "z=0_var_3_t00020000_n00005000.out",
+            "z=0_var_3_t00030000_n00007500.out",
+        ]
 
     def test_run_dir_includes_param_summary_and_saveplot_findings(self, tmp_path: Path) -> None:
         workspace = tmp_path / "workspace"
@@ -625,20 +652,11 @@ class TestInspectArtifact:
         assert summary_finding["session_count"] == 2
         assert summary_finding["saveplot_block_count"] == 1
         assert "IH" in summary_finding["required_components"]
-        assert any(item["key"] == "TimeMax" for item in summary_finding["control_settings"])
-        assert any(item["command"] == "#SAVEPLOT" for item in summary_finding["key_command_timeline"])
-
-        saveplot_finding = next(item for item in result["findings"] if item["kind"] == "run_dir_param_saveplot")
-        saveplot_block = saveplot_finding["saveplot_blocks"][0]
-        assert saveplot_block["declared_plot_count"] == 2
-        assert saveplot_block["entry_count"] == 2
-        assert saveplot_block["plot_forms"] == ["ascii", "idl"]
-
-        first_entry = saveplot_block["entries"][0]
-        assert first_entry["plot_area"] == "z=0"
-        assert first_entry["plot_form"] == "idl"
-        assert first_entry["cadence"]["DtSavePlot"] == 600.0
-        assert "bx" in first_entry["name_vars"]
+        assert summary_finding["line_count"] > 0
+        assert summary_finding["parser_error_count"] == 0
+        assert "control_settings" not in summary_finding
+        assert "key_command_timeline" not in summary_finding
+        assert all(item["kind"] != "run_dir_param_saveplot" for item in result["findings"])
 
     def test_run_dir_explicitly_reports_missing_param_in_file(self, tmp_path: Path) -> None:
         workspace = tmp_path / "workspace"
@@ -658,6 +676,178 @@ class TestInspectArtifact:
         missing_param = next(item for item in result["findings"] if item["kind"] == "run_dir_param_missing")
         assert missing_param["location"].endswith("PARAM.in")
         assert "missing" in missing_param["description"].lower()
+
+    def test_run_dir_reports_layout_markers_and_postproc_states(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+
+        completed = workspace / "completed"
+        completed.mkdir()
+        (completed / "PARAM.in").write_text("#END\n", encoding="utf-8")
+        (completed / "SWMF.SUCCESS").write_text("", encoding="utf-8")
+        (completed / "SWMF.DONE").write_text("", encoding="utf-8")
+        (completed / "PostProc.log").write_text(
+            "PostProc.pl normal completion\nWARNING: missing optional plot\n",
+            encoding="utf-8",
+        )
+
+        graceful = workspace / "graceful"
+        graceful.mkdir()
+        (graceful / "PARAM.in").write_text("#END\n", encoding="utf-8")
+        (graceful / "SWMF.SUCCESS").write_text("", encoding="utf-8")
+
+        killed = workspace / "killed"
+        killed.mkdir()
+        (killed / "PARAM.in").write_text("#END\n", encoding="utf-8")
+        (killed / "SWMF.KILL").write_text("", encoding="utf-8")
+
+        completed_result = self._call(artifact_type="run_dir", path=str(completed), swmf_root=str(swmf_root))
+        graceful_result = self._call(artifact_type="run_dir", path=str(graceful), swmf_root=str(swmf_root))
+        killed_result = self._call(artifact_type="run_dir", path=str(killed), swmf_root=str(swmf_root))
+
+        completed_presence = next(item for item in completed_result["findings"] if item["kind"] == "artifact_presence")
+        graceful_presence = next(item for item in graceful_result["findings"] if item["kind"] == "artifact_presence")
+        killed_presence = next(item for item in killed_result["findings"] if item["kind"] == "artifact_presence")
+        markers = next(item for item in killed_result["findings"] if item["kind"] == "status_markers")
+        layout = next(item for item in completed_result["findings"] if item["kind"] == "run_dir_layout")
+        postproc = next(item for item in completed_result["findings"] if item["kind"] == "postproc_state")
+
+        assert completed_presence["marker_run_status"] == "completed"
+        assert graceful_presence["marker_run_status"] == "graceful_stop_or_partial"
+        assert killed_presence["marker_run_status"] == "killed"
+        assert "SWMF.KILL" in markers["markers"]
+        assert "SWMF.SUCCESS" not in markers["markers"]
+        assert layout["layout"] == "live_run_dir"
+        assert postproc["state"] == "completed_with_warnings"
+        assert postproc["warning_count"] == 1
+
+    def test_run_dir_reports_results_tree_restart_inventory_and_component_roots(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        result_tree = workspace / "Results" / "Run_Max_RP" / "run01"
+        (result_tree / "RESTART").mkdir(parents=True)
+        (result_tree / "PARAM.in").write_text(
+            "\n".join(
+                [
+                    "#COMPONENTMAP",
+                    "SC 0 0 1",
+                    "IH 0 0 1",
+                    "IE 0 0 1",
+                    "UA 0 0 1",
+                    "IM 0 0 1",
+                    "PW 0 0 1",
+                    "#END",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (result_tree / "RESTART.out").write_text("restart\n", encoding="utf-8")
+        for rel_file in (
+            "SC/IO2/z=0_var_1_t0001.out",
+            "SC/IO2/z=0_var_1_t0002.out",
+            "IH/IO2/y=0_var_1_t0001.out",
+            "IE/ionosphere/it001.out",
+            "UA/Output/ua_output.dat",
+            "IM/plots/im_plot.out",
+            "PW/plots/pw_plot.out",
+            "SC/restartOUT/restart.h",
+        ):
+            path = result_tree / rel_file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("data\n", encoding="utf-8")
+
+        result = self._call(artifact_type="run_dir", path=str(result_tree), swmf_root=str(swmf_root))
+
+        layout = next(item for item in result["findings"] if item["kind"] == "run_dir_layout")
+        inventory = next(item for item in result["findings"] if item["kind"] == "component_artifact_inventory")
+        restart = next(item for item in result["findings"] if item["kind"] == "restart_inventory")
+        components = {item["component"]: item for item in inventory["components"]}
+
+        assert layout["layout"] == "postprocessed_results_tree"
+        for component in ("SC", "IH", "IE", "UA", "IM", "PW"):
+            assert component in components
+            assert components[component]["file_count"] >= 1
+        assert any(root["relative_path"] == "IE/ionosphere" for root in components["IE"]["output_roots"])
+        assert any(root["relative_path"] == "UA/Output" for root in components["UA"]["output_roots"])
+        assert any(item["component"] == "SC" for item in restart["components"])
+        assert any(item["name"] == "RESTART.out" for item in restart["framework"])
+        assert any(path.endswith("RESTART") for path in restart["restart_tree_candidates"])
+
+    def test_run_dir_output_artifacts_match_saveplot_intent(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        (run_dir / "IH").mkdir(parents=True)
+        (run_dir / "PARAM.in").write_text(
+            "\n".join(
+                [
+                    "#COMPONENTMAP",
+                    "IH 0 0 1",
+                    "#SAVEPLOT",
+                    "1 nPlotFile",
+                    "z=0 VAR idl StringPlot",
+                    "600.0 DtSavePlot",
+                    "ux uy NameVars",
+                    "#END",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_dir / "IH" / "z=0_var_3_t0001.out").write_text("frame\n", encoding="utf-8")
+        (run_dir / "IH" / "z=0_var_3_t0002.out").write_text("frame\n", encoding="utf-8")
+        (run_dir / "IH" / "z=0_var_3.outs").write_text("combined\n", encoding="utf-8")
+
+        result = self._call(artifact_type="run_dir", path=str(run_dir), swmf_root=str(swmf_root))
+
+        artifacts = next(item for item in result["findings"] if item["kind"] == "component_output_artifacts")
+        entry = artifacts["entries"][0]
+        assert entry["component"] == "IH"
+        assert entry["plot_area"] == "z=0"
+        assert entry["plot_form"] == "idl"
+        assert entry["raw_frame_count"] == 2
+        assert entry["combined_outs_present"] is True
+        assert entry["combined_outs"] == "z=0_var_3.outs"
+        assert entry["example_files"] == ["z=0_var_3_t0001.out", "z=0_var_3_t0002.out"]
+
+    def test_run_dir_output_artifacts_are_single_compact_finding(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        swmf_root = self._make_fake_swmf_root(workspace)
+        run_dir = workspace / "run01"
+        ih_dir = run_dir / "IH"
+        ih_dir.mkdir(parents=True)
+        (run_dir / "PARAM.in").write_text(
+            "\n".join(
+                [
+                    "#COMPONENTMAP",
+                    "IH 0 0 1",
+                    "#SAVEPLOT",
+                    "1 nPlotFile",
+                    "z=0 VAR idl StringPlot",
+                    "600.0 DtSavePlot",
+                    " ".join(f"var{i}" for i in range(40)) + " NameVars",
+                    "#END",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for index in range(1, 15):
+            (ih_dir / f"z=0_var_3_t{index:04d}.out").write_text("frame\n", encoding="utf-8")
+        (ih_dir / "z=0_var_3.outs").write_text("combined\n", encoding="utf-8")
+
+        compact = self._call(artifact_type="run_dir", path=str(run_dir), swmf_root=str(swmf_root))
+        kinds = [item["kind"] for item in compact["findings"]]
+        assert "snapshot_group_index" not in kinds
+        assert "saveplot_realization" not in kinds
+        assert "component_output_files" not in kinds
+        artifacts = next(item for item in compact["findings"] if item["kind"] == "component_output_artifacts")
+        entry = artifacts["entries"][0]
+        assert entry["raw_frame_count"] == 14
+        assert len(entry["example_files"]) == 2
+        assert "first_frame" not in entry
+        assert "snapshot_group_ids" not in entry
 
     def test_result_extracts_binary_idl_plot_header(self, tmp_path: Path) -> None:
         swmf_root = self._make_fake_swmf_root(tmp_path)

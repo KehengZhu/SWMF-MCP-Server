@@ -86,11 +86,12 @@ tools:
     description: >
       Inspect a local artifact such as a log, PARAM file, XML file, run
       directory, build output, or result file and return structured findings.
+      runlog is accepted as an alias for log.
     input_schema:
       artifact_type:
         type: string
         required: true
-        enum: [log, param, xml, run_dir, build_output, result]
+        enum: [log, runlog, param, xml, run_dir, build_output, result]
       path: {type: string, required: true}
       question: {type: string, required: false, default: ""}
       swmf_root: {type: string, required: false}

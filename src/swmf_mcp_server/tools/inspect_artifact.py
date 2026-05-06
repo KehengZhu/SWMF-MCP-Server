@@ -46,6 +46,7 @@ Field semantics
 ---------------
 artifact_type : Required. One of:
                 "log"         — runtime log file (SWMF or component)
+                "runlog"      — alias for "log"
                 "param"       — PARAM.in input file
                 "xml"         — PARAM.XML schema file
                 "run_dir"     — entire run directory (inventory + layout)
@@ -79,13 +80,13 @@ from ..parsing.xml_parser import parse_param_xml_file
 
 _VALID_ARTIFACT_TYPES = frozenset({
     "log",
+    "runlog",
     "param",
     "xml",
     "run_dir",
     "build_output",
     "result",
 })
-
 _MAX_FILE_CHARS = 200_000  # guard against very large non-log text files
 _LOG_HEAD_LINES = 40
 _LOG_TAIL_LINES = 120
@@ -162,6 +163,32 @@ _SWMF_ROOT_MARKERS = [
 
 _COMPONENT_DIR_PREFIXES = ("GM", "IE", "SC", "IH", "OH", "UA", "IM", "PW", "RB", "SP")
 _KNOWN_COMPONENT_CODES = frozenset(_COMPONENT_DIR_PREFIXES + ("CON", "PC", "PT"))
+_COMPONENT_OUTPUT_ROOTS: dict[str, tuple[str, ...]] = {
+    "SC": ("SC/IO2", "SC/plots", "SC"),
+    "IH": ("IH/IO2", "IH/plots", "IH"),
+    "OH": ("OH/IO2", "OH/plots", "OH"),
+    "GM": ("GM/IO2", "GM/plots", "GM"),
+    "IE": ("IE/ionosphere", "IE/Output", "IE"),
+    "UA": ("UA/Output", "UA/data", "UA"),
+    "IM": ("IM/plots", "IM/Output", "IM"),
+    "PW": ("PW/plots", "PW/Output", "PW"),
+    "RB": ("RB/plots", "RB/Output", "RB"),
+    "SP": ("SP/plots", "SP/Output", "SP"),
+}
+_STATUS_MARKER_NAMES = (
+    "PARAM.in",
+    "SWMF.SUCCESS",
+    "SWMF.DONE",
+    "SWMF.KILL",
+    "SWMF.KILLED",
+    "SWMF.STOP",
+    "PostProc.STOP",
+    "RESTART.in",
+    "RESTART.out",
+    "PostProc.pl",
+    "PostProc.log",
+    "RESULTS",
+)
 _RUN_DIR_EXPECTED_ENTRIES = [
     "PARAM.in",
     "runlog",
@@ -256,7 +283,7 @@ def _is_low_signal_repeated_pattern(pattern: str) -> bool:
 def _is_low_signal_tail_line(line: str) -> bool:
     if _SEPARATOR_RE.match(line):
         return True
-    if line == "name #iter #calls sec s/iter s/call percent":
+    if line in {"name #iter #calls sec s/iter s/call percent", "name sec percent #iter #calls"}:
         return True
     if _TIMING_BLOCK_RE.search(line):
         return True
@@ -548,6 +575,44 @@ def _stream_log_summary(path_str: str) -> tuple[dict[str, Any] | None, str | Non
         "repeated_patterns": top_repeated,
         "stacktrace_lines": stacktrace_lines,
     }, None
+
+
+def _discover_run_log_candidates(run_dir: Path) -> list[Path]:
+    """Find top-level runtime logs without treating ordinary data .out files as logs."""
+    patterns = [
+        "runlog*",
+        "*.log",
+        "slurm*.out",
+        "SWMF*.out",
+        "swmf*.out",
+        "job*.out",
+        "stdout*.out",
+        "stderr*.out",
+    ]
+    candidates: dict[Path, None] = {}
+    for pattern in patterns:
+        for candidate in run_dir.glob(pattern):
+            if candidate.is_file():
+                candidates[candidate] = None
+    return sorted(candidates)
+
+
+def _run_log_chronology_key(path: Path) -> tuple[int, float, str]:
+    digit_groups = re.findall(r"\d+", path.name)
+    numeric_key = int(digit_groups[-1]) if digit_groups else -1
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return numeric_key, mtime, path.name
+
+
+def _status_from_primary_log(marker_status: str, log_status: str | None) -> str:
+    if marker_status == "killed":
+        return marker_status
+    if log_status in {"failed", "completed", "completed_with_diagnostics"}:
+        return log_status
+    return marker_status
 
 
 def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]]]:
@@ -1426,23 +1491,46 @@ def _sample_names(paths: list[Path], limit: int = 8) -> list[str]:
     return [path.name for path in sorted(paths)[:limit]]
 
 
-def _snapshot_frame_summary(files: list[Path]) -> dict[str, str]:
-    sorted_files = sorted(files)
-    if not sorted_files:
-        return {}
+def _path_sample(paths: list[Path], base: Path, limit: int = 8) -> list[str]:
+    samples: list[str] = []
+    for path in sorted(paths)[:limit]:
+        try:
+            samples.append(str(path.relative_to(base)))
+        except ValueError:
+            samples.append(str(path))
+    return samples
 
-    middle_index = len(sorted_files) // 2
-    first = sorted_files[0]
-    middle = sorted_files[middle_index]
-    last = sorted_files[-1]
-    return {
-        "first_frame": first.name,
-        "middle_frame": middle.name,
-        "last_frame": last.name,
-        "first_frame_path": str(first),
-        "middle_frame_path": str(middle),
-        "last_frame_path": str(last),
-    }
+
+def _safe_is_symlink_target(path: Path) -> str | None:
+    if not path.is_symlink():
+        return None
+    try:
+        return os.readlink(path)
+    except OSError:
+        return "<unreadable>"
+
+
+def _iter_files_limited(root: Path, limit: int = 10_000) -> list[Path]:
+    files: list[Path] = []
+    if not root.exists():
+        return files
+    if root.is_file():
+        return [root]
+    try:
+        iterator = root.rglob("*")
+        for item in iterator:
+            if item.is_file():
+                files.append(item)
+                if len(files) >= limit:
+                    break
+    except OSError:
+        return files
+    return files
+
+
+def _extension_counts(files: list[Path]) -> dict[str, int]:
+    counts = Counter(path.suffix.lower() or "<none>" for path in files)
+    return dict(sorted(counts.items()))
 
 
 def _snapshot_groups(component_dir: Path) -> list[dict[str, Any]]:
@@ -1461,8 +1549,7 @@ def _snapshot_groups(component_dir: Path) -> list[dict[str, Any]]:
             "base": base_name,
             "pattern": f"{base_name}_t*_n*.out" if has_step_suffix else f"{base_name}_t*.out",
             "count": len(files),
-            "samples": _sample_names(files, limit=5),
-            **_snapshot_frame_summary(files),
+            "samples": _sample_names(files, limit=2),
             "expected_outs": combined_name,
             "combined_outs": combined_name,
             "combined_outs_exists": (component_dir / combined_name).is_file(),
@@ -1470,45 +1557,381 @@ def _snapshot_groups(component_dir: Path) -> list[dict[str, Any]]:
     return grouped[:12]
 
 
-def _component_output_findings(p: Path, question: str) -> list[dict[str, Any]]:
-    q_lower = question.lower()
-    focused = any(
-        token in q_lower
-        for token in ("ih", "z=0", ".out", ".outs", "animate", "animation", "cut", "plane")
+def _snapshot_groups_recursive(root: Path, base: Path) -> list[dict[str, Any]]:
+    grouped: list[dict[str, Any]] = []
+    for directory in sorted({path.parent for path in root.rglob("*.out") if path.is_file()}):
+        for group in _snapshot_groups(directory):
+            group = dict(group)
+            try:
+                group["directory"] = str(directory.relative_to(base))
+            except ValueError:
+                group["directory"] = str(directory)
+            grouped.append(group)
+            if len(grouped) >= 24:
+                return grouped
+    return grouped
+
+
+def _observed_snapshot_groups(p: Path, components: list[str]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for comp in components:
+        for rel_root in _COMPONENT_OUTPUT_ROOTS.get(comp, (comp,)):
+            root = p / rel_root
+            if not root.is_dir():
+                continue
+            for group in _snapshot_groups_recursive(root, p):
+                directory = str(group.get("directory") or rel_root)
+                base_name = str(group.get("base") or "")
+                if not base_name:
+                    continue
+                key = (comp, directory, base_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                groups.append({
+                    "component": comp,
+                    "directory": directory,
+                    "base": base_name,
+                    "pattern": group.get("pattern"),
+                    "count": group.get("count", 0),
+                    "combined_outs": group.get("combined_outs"),
+                    "combined_outs_exists": bool(group.get("combined_outs_exists")),
+                    "samples": group.get("samples", [])[:2],
+                })
+    return sorted(groups, key=lambda item: (str(item["component"]), str(item["directory"]), str(item["base"])))
+
+
+def _status_markers(p: Path) -> dict[str, dict[str, Any]]:
+    markers: dict[str, dict[str, Any]] = {}
+    for name in _STATUS_MARKER_NAMES:
+        path = p / name
+        if not path.exists():
+            continue
+        item: dict[str, Any] = {
+            "path": str(path),
+            "is_dir": path.is_dir(),
+            "is_symlink": path.is_symlink(),
+        }
+        target = _safe_is_symlink_target(path)
+        if target is not None:
+            item["symlink_target"] = target
+        markers[name] = item
+    return markers
+
+
+def _classify_run_dir_layout(p: Path, markers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    component_dirs = [
+        item.name
+        for item in sorted(p.iterdir())
+        if item.is_dir() and _component_from_dir_name(item.name) is not None
+    ]
+    has_param = "PARAM.in" in markers
+    has_results = "RESULTS" in markers
+    has_log = bool(_discover_run_log_candidates(p))
+    has_framework_restart = "RESTART.in" in markers or "RESTART.out" in markers
+    has_restart_subdir = (p / "RESTART").is_dir()
+    per_comp_restart = any(
+        ((p / comp / "restartIN").exists() or (p / comp / "restartOUT").exists())
+        for comp in component_dirs
     )
 
-    findings: list[dict[str, Any]] = []
-    for subdir in sorted((item for item in p.iterdir() if item.is_dir()), key=lambda item: item.name):
-        component = _component_from_dir_name(subdir.name)
-        if component is None:
-            continue
-        if not focused and component != "IH":
-            continue
+    if has_param and (has_restart_subdir or p.parent.name.lower() in {"results", "result"}):
+        layout = "postprocessed_results_tree"
+    elif has_param and (has_log or component_dirs or "SWMF.SUCCESS" in markers or "SWMF.KILL" in markers):
+        layout = "live_run_dir"
+    elif has_framework_restart or per_comp_restart or has_restart_subdir:
+        layout = "restart_tree"
+    elif _component_from_dir_name(p.name) is not None:
+        layout = "component_dir"
+    elif has_results:
+        layout = "live_run_dir"
+    else:
+        layout = "unknown"
 
-        pattern_matches: dict[str, dict[str, Any]] = {}
-        for pattern in ("z=0*.out", "z=0*.outs", "x=0*.out", "y=0*.out", "*.out", "*.outs", "*.log", "PARAM.in"):
-            matches = sorted(subdir.glob(pattern))
-            pattern_matches[pattern] = {
-                "count": len(matches),
-                "samples": _sample_names(matches, limit=8),
+    evidence: dict[str, Any] = {}
+    if has_param:
+        evidence["has_param_in"] = True
+    if has_results:
+        evidence["has_results_dir"] = True
+    if has_log:
+        evidence["has_run_logs"] = True
+    if has_framework_restart:
+        evidence["has_framework_restart"] = True
+    if has_restart_subdir:
+        evidence["has_restart_subdir"] = True
+    if component_dirs:
+        evidence["component_dirs"] = component_dirs[:20]
+    return {
+        "kind": "run_dir_layout",
+        "location": str(p),
+        "description": f"Run-directory layout classified as {layout}.",
+        "layout": layout,
+        "evidence": evidence,
+    }
+
+
+def _postproc_state(p: Path, markers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    log_path = p / "PostProc.log"
+    log_tail: list[str] = []
+    log_status = "missing"
+    warning_count = 0
+    diagnostic_count = 0
+    error_count = 0
+    repeat_mode = False
+    completed = False
+    if log_path.is_file():
+        compact, err = _stream_log_summary(str(log_path))
+        if compact is None:
+            log_status = "unreadable"
+            log_tail = [err or "PostProc.log could not be read."]
+        else:
+            log_status = compact["status"]
+            log_tail = compact["tail_lines"]
+            warning_count = compact["warning_count"]
+            diagnostic_count = len(compact["diagnostics"])
+            error_count = sum(
+                1
+                for item in compact["diagnostics"]
+                if re.search(r"\b(?:ERROR|FATAL|abort|exception|traceback)\b", str(item.get("pattern", "")), re.IGNORECASE)
+            )
+            tail_text = "\n".join(log_tail).lower()
+            repeat_mode = "repeat" in tail_text
+            completed = log_status in {"completed", "completed_with_diagnostics"} or "normal completion" in tail_text
+
+    if "PostProc.STOP" in markers:
+        state = "running_or_stopped"
+    elif log_path.is_file() and any("ERROR in PostProc.pl" in line for line in log_tail):
+        state = "failed"
+    elif log_path.is_file() and (log_status == "failed" or error_count):
+        state = "failed"
+    elif log_path.is_file() and repeat_mode:
+        state = "running_repeat_mode"
+    elif log_path.is_file() and warning_count:
+        state = "completed_with_warnings" if completed else "unknown_with_warnings"
+    elif log_path.is_file() and completed:
+        state = "completed"
+    elif "RESULTS" in markers:
+        state = "completed_or_collected"
+    elif log_path.is_file():
+        state = "unknown"
+    else:
+        state = "not_run"
+
+    result = {
+        "kind": "postproc_state",
+        "location": str(log_path if log_path.exists() else p),
+        "description": f"PostProc state classified as {state}.",
+        "state": state,
+        "warning_count": warning_count,
+        "diagnostic_count": diagnostic_count,
+        "error_diagnostic_count": error_count,
+    }
+    if log_path.is_file():
+        result["postproc_log"] = str(log_path)
+        result["tail_lines"] = log_tail[-12:]
+    if "PostProc.STOP" in markers:
+        result["postproc_stop"] = markers["PostProc.STOP"]
+    if "RESULTS" in markers:
+        result["results_dir"] = markers["RESULTS"]
+    return result
+
+
+def _declared_components_from_param(required_components: list[str], saveplot_blocks: list[dict[str, Any]]) -> list[str]:
+    declared: set[str] = set(required_components)
+    for block in saveplot_blocks:
+        comp = block.get("component")
+        if isinstance(comp, str) and len(comp) == 2:
+            declared.add(comp.upper())
+    return sorted(declared)
+
+
+def _component_artifact_inventory(
+    p: Path,
+    declared_components: list[str],
+) -> dict[str, Any]:
+    discovered = {
+        comp
+        for item in p.iterdir()
+        if item.is_dir() and (comp := _component_from_dir_name(item.name)) is not None
+    }
+    components = sorted(discovered | set(declared_components))
+    inventories: list[dict[str, Any]] = []
+    for comp in components:
+        roots: list[dict[str, Any]] = []
+        all_files: list[Path] = []
+        for rel_root in _COMPONENT_OUTPUT_ROOTS.get(comp, (comp,)):
+            root = p / rel_root
+            if not root.exists():
+                continue
+            root_files = _iter_files_limited(root)
+            all_files.extend(root_files)
+            root_item: dict[str, Any] = {
+                "relative_path": rel_root,
+                "path": str(root),
+                "is_symlink": root.is_symlink(),
+                "file_count": len(root_files),
+                "extension_counts": _extension_counts(root_files),
             }
+            target = _safe_is_symlink_target(root)
+            if target is not None:
+                root_item["symlink_target"] = target
+            roots.append(root_item)
 
-        snapshot_groups = _snapshot_groups(subdir)
-        total_out = pattern_matches["*.out"]["count"]
-        total_outs = pattern_matches["*.outs"]["count"]
-        findings.append({
-            "kind": "component_output_files",
-            "location": str(subdir),
-            "description": (
-                f"{component} output directory has {total_out} .out file(s), "
-                f"{total_outs} .outs file(s), and {len(snapshot_groups)} time-snapshot group(s)."
-            ),
-            "component": component,
-            "patterns": pattern_matches,
-            "snapshot_groups": snapshot_groups,
-        })
+        log_files = [
+            path for path in all_files
+            if path.name.lower().startswith("log") or path.suffix.lower() == ".log"
+        ]
+        inventory = {
+            "component": comp,
+            "declared_in_param": comp in declared_components,
+            "discovered": comp in discovered,
+            "file_count": len(set(all_files)),
+            "extension_counts": _extension_counts(list(set(all_files))),
+        }
+        if roots:
+            inventory["output_roots"] = roots
+        if log_files:
+            inventory["logs"] = _path_sample(log_files, p, limit=8)
+        inventories.append(inventory)
 
-    return findings
+    return {
+        "kind": "component_artifact_inventory",
+        "location": str(p),
+        "description": f"Inventoried artifacts for {len(inventories)} component(s).",
+        "components": inventories,
+    }
+
+
+def _restart_inventory(p: Path) -> dict[str, Any]:
+    framework = []
+    for name in ("RESTART.in", "RESTART.out"):
+        path = p / name
+        if not path.exists():
+            continue
+        item = {
+            "name": name,
+            "path": str(path),
+            "is_symlink": path.is_symlink(),
+        }
+        target = _safe_is_symlink_target(path)
+        if target is not None:
+            item["symlink_target"] = target
+        framework.append(item)
+
+    components: list[dict[str, Any]] = []
+    for item in sorted(p.iterdir()):
+        if not item.is_dir():
+            continue
+        comp = _component_from_dir_name(item.name)
+        if comp is None:
+            continue
+        restart_dirs = []
+        for name in ("restartIN", "restartOUT"):
+            restart_path = item / name
+            if not restart_path.exists():
+                continue
+            files = _iter_files_limited(restart_path)
+            item = {
+                "name": name,
+                "path": str(restart_path),
+                "is_symlink": restart_path.is_symlink(),
+                "file_count": len(files),
+                "samples": _path_sample(files, p, limit=6),
+            }
+            target = _safe_is_symlink_target(restart_path)
+            if target is not None:
+                item["symlink_target"] = target
+            restart_dirs.append(item)
+        if restart_dirs:
+            components.append({"component": comp, "restart_dirs": restart_dirs})
+
+    candidates = []
+    for pattern in ("RESTART*", "RESULTS/*/RESTART", "RESULTS/*/RESTART*"):
+        for candidate in sorted(p.glob(pattern))[:20]:
+            candidates.append(str(candidate))
+
+    return {
+        "kind": "restart_inventory",
+        "location": str(p),
+        "description": (
+            f"Restart inventory: {len(framework)} framework marker(s), "
+            f"{len(components)} component restart area(s)."
+        ),
+        "framework": framework,
+        "components": components,
+        "restart_tree_candidates": candidates[:40],
+    }
+
+
+def _saveplot_entries_by_component(
+    saveplot_blocks: list[dict[str, Any]],
+    fallback_components: list[str],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for block in saveplot_blocks:
+        block_component = block.get("component")
+        components = [str(block_component).upper()] if block_component else fallback_components
+        for entry in block.get("entries", []):
+            entries.append({
+                "components": components,
+                "plot_area": entry.get("plot_area"),
+                "plot_form": entry.get("plot_form"),
+                "cadence": entry.get("cadence", {}),
+            })
+    return entries
+
+
+def _component_output_artifacts(
+    p: Path,
+    saveplot_blocks: list[dict[str, Any]],
+    declared_components: list[str],
+) -> dict[str, Any]:
+    fallback_components = declared_components or sorted(
+        {
+            comp
+            for item in p.iterdir()
+            if item.is_dir() and (comp := _component_from_dir_name(item.name)) is not None
+        }
+    )
+    saveplot_entries = _saveplot_entries_by_component(saveplot_blocks, fallback_components)
+    observed_groups = _observed_snapshot_groups(p, fallback_components)
+
+    entries: list[dict[str, Any]] = []
+    for group in observed_groups:
+        group_base = str(group.get("base") or "")
+        group_base_lower = group_base.lower()
+        matched_saveplot = None
+        for candidate in saveplot_entries:
+            if group.get("component") not in candidate["components"]:
+                continue
+            plot_area = str(candidate.get("plot_area") or "")
+            if plot_area and plot_area.lower() not in group_base_lower:
+                continue
+            matched_saveplot = candidate
+            break
+
+        item = {
+            "component": group.get("component"),
+            "plot_area": matched_saveplot.get("plot_area") if matched_saveplot else None,
+            "plot_form": matched_saveplot.get("plot_form") if matched_saveplot else None,
+            "cadence": matched_saveplot.get("cadence", {}) if matched_saveplot else {},
+            "directory": group.get("directory"),
+            "pattern": group.get("pattern"),
+            "raw_frame_count": group.get("count", 0),
+            "combined_outs_present": bool(group.get("combined_outs_exists")),
+            "example_files": group.get("samples", [])[:2],
+        }
+        if group.get("combined_outs_exists"):
+            item["combined_outs"] = group.get("combined_outs")
+        entries.append(item)
+
+    return {
+        "kind": "component_output_artifacts",
+        "location": str(p),
+        "description": f"Summarized {len(entries)} observed component output artifact group(s).",
+        "entries": entries[:40],
+    }
 
 
 def _inspect_run_dir(
@@ -1523,46 +1946,68 @@ def _inspect_run_dir(
     findings: list[dict[str, Any]] = []
 
     # --- Directory inventory ---
+    total_top_level_items = 0
     files_found: list[str] = []
     for item in sorted(p.iterdir()):
-        files_found.append(item.name + ("/" if item.is_dir() else ""))
-    files_found = files_found[:60]
+        total_top_level_items += 1
+        if len(files_found) < 60:
+            files_found.append(item.name + ("/" if item.is_dir() else ""))
 
     findings.append({
         "kind": "directory_inventory",
         "location": path_str,
-        "description": f"{len(files_found)} top-level items in run directory.",
+        "description": f"{total_top_level_items} top-level items in run directory.",
+        "total_count": total_top_level_items,
         "items": files_found,
     })
+
+    markers = _status_markers(p)
+    findings.append({
+        "kind": "status_markers",
+        "location": path_str,
+        "description": "SWMF, restart, and PostProc marker files inventoried.",
+        "markers": markers,
+    })
+    findings.append(_classify_run_dir_layout(p, markers))
+    findings.append(_postproc_state(p, markers))
 
     # --- Artifact presence (SWMF status files) ---
     artifact_keys = [
         "PARAM.in", "RESTART.in", "RESTART.out",
-        "SWMF.SUCCESS", "SWMF.DONE", "SWMF.KILLED",
+        "SWMF.SUCCESS", "SWMF.DONE", "SWMF.KILL", "SWMF.KILLED", "SWMF.STOP",
     ]
-    artifact_presence: dict[str, bool] = {
-        name: (p / name).exists() for name in artifact_keys
+    artifact_presence: dict[str, str] = {
+        name: str(p / name) for name in artifact_keys if (p / name).exists()
     }
-    # Infer run status
-    if artifact_presence.get("SWMF.SUCCESS") or artifact_presence.get("SWMF.DONE"):
-        run_status = "completed"
-    elif artifact_presence.get("SWMF.KILLED"):
-        run_status = "killed"
-    elif artifact_presence.get("PARAM.in"):
-        run_status = "prepared_or_running"
+    # Infer marker-only status first. Runtime logs can refine this below.
+    if "SWMF.KILL" in artifact_presence or "SWMF.KILLED" in artifact_presence:
+        marker_run_status = "killed"
+    elif "SWMF.SUCCESS" in artifact_presence and "SWMF.DONE" in artifact_presence:
+        marker_run_status = "completed"
+    elif "SWMF.SUCCESS" in artifact_presence:
+        marker_run_status = "graceful_stop_or_partial"
+    elif "SWMF.STOP" in artifact_presence:
+        marker_run_status = "stopped"
+    elif "PARAM.in" in artifact_presence:
+        marker_run_status = "prepared_or_running"
     else:
-        run_status = "unknown"
+        marker_run_status = "unknown"
 
-    findings.append({
+    run_status = marker_run_status
+    artifact_finding = {
         "kind": "artifact_presence",
         "location": path_str,
         "description": f"Run status: {run_status}. Key artifacts detected.",
         "artifact_presence": artifact_presence,
+        "marker_run_status": marker_run_status,
         "run_status": run_status,
-    })
+    }
+    findings.append(artifact_finding)
 
     param_status = "missing"
     param_path = p / "PARAM.in"
+    required_components: list[str] = []
+    saveplot_blocks: list[dict[str, Any]] = []
     if param_path.is_file():
         param_text, param_err = _read_file_safe(str(param_path))
         if param_err or param_text is None:
@@ -1583,26 +2028,18 @@ def _inspect_run_dir(
                 "kind": "run_dir_param_summary",
                 "location": str(param_path),
                 "description": (
-                    f"PARAM.in parsed: {len(parsed_param.sessions)} session(s), "
+                    f"PARAM.in present: {len(param_text.splitlines())} line(s), "
+                    f"{len(parsed_param.sessions)} session(s), "
                     f"{len(required_components)} component(s), "
                     f"{len(saveplot_blocks)} #SAVEPLOT block(s)."
                 ),
                 "param_path": str(param_path),
+                "line_count": len(param_text.splitlines()),
                 "session_count": len(parsed_param.sessions),
                 "required_components": required_components,
-                "session_timeline": param_semantics["session_timeline"][:8],
-                "key_command_timeline": param_semantics["key_command_timeline"][:24],
-                "control_settings": param_semantics["control_summary"][:20],
                 "saveplot_block_count": len(saveplot_blocks),
-                "parser_errors": parsed_param.errors[:10],
-                "parser_warnings": parsed_param.warnings[:10],
-            })
-
-            findings.append({
-                "kind": "run_dir_param_saveplot",
-                "location": str(param_path),
-                "description": f"Saved-plot settings extracted from {len(saveplot_blocks)} #SAVEPLOT block(s).",
-                "saveplot_blocks": saveplot_blocks[:8],
+                "parser_error_count": len(parsed_param.errors),
+                "parser_warning_count": len(parsed_param.warnings),
             })
     else:
         findings.append({
@@ -1612,24 +2049,29 @@ def _inspect_run_dir(
         })
 
     # --- Log file discovery and first-error preview ---
-    log_candidates: list[Path] = []
-    for pattern in ["runlog*", "*.log", "*.out"]:
-        log_candidates.extend(sorted(p.glob(pattern)))
-    log_candidates = log_candidates[:5]
+    log_candidates = _discover_run_log_candidates(p)
+    primary_log: Path | None = sorted(log_candidates, key=_run_log_chronology_key)[-1] if log_candidates else None
+    primary_log_compact: dict[str, Any] | None = None
+    primary_log_error: str | None = None
 
-    if log_candidates:
-        primary_log = log_candidates[0]
-        log_compact, log_error = _stream_log_summary(str(primary_log))
-        if log_compact is None:
+    if primary_log is not None:
+        primary_log_compact, primary_log_error = _stream_log_summary(str(primary_log))
+        if primary_log_compact is None:
             first_error = {"found": False}
             log_lines = 0
             log_status = "unknown"
             log_bytes = None
         else:
-            first_error = log_compact["first_error"]
-            log_lines = log_compact["line_count"]
-            log_status = log_compact["status"]
-            log_bytes = log_compact.get("bytes")
+            first_error = primary_log_compact["first_error"]
+            log_lines = primary_log_compact["line_count"]
+            log_status = primary_log_compact["status"]
+            log_bytes = primary_log_compact.get("bytes")
+
+        run_status = _status_from_primary_log(marker_run_status, log_status)
+        artifact_finding["run_status"] = run_status
+        artifact_finding["description"] = f"Run status: {run_status}. Key artifacts detected."
+        if run_status != marker_run_status:
+            artifact_finding["status_source"] = "primary_log"
 
         log_finding: dict[str, Any] = {
             "kind": "log_discovery",
@@ -1638,6 +2080,7 @@ def _inspect_run_dir(
                 f"Primary log: {primary_log.name} ({log_lines} lines"
                 + (f", {log_bytes} bytes" if log_bytes is not None else "")
                 + f", status={log_status}). "
+                + (f"Listed {len(log_candidates)} discovered log(s); content summary is from the latest log only. ")
                 + (f"First error at line {first_error['line_number']}." if first_error.get("found") else "No errors detected.")
             ),
             "log_files": [str(lf) for lf in log_candidates],
@@ -1646,15 +2089,15 @@ def _inspect_run_dir(
             "line_count": log_lines,
             "bytes": log_bytes,
         }
-        if log_error:
-            log_finding["read_error"] = log_error
+        if primary_log_error:
+            log_finding["read_error"] = primary_log_error
         if first_error.get("found"):
             log_finding["first_error"] = first_error
-        if log_compact is not None:
-            log_finding["tail_lines"] = log_compact["tail_lines"]
-            log_finding["tail_omitted_low_signal_lines"] = log_compact["tail_omitted_low_signal_lines"]
-            log_finding["diagnostics"] = log_compact["diagnostics"][:8]
-            log_finding["progress"] = log_compact["progress"]
+        if primary_log_compact is not None:
+            log_finding["tail_lines"] = primary_log_compact["tail_lines"]
+            log_finding["tail_omitted_low_signal_lines"] = primary_log_compact["tail_omitted_low_signal_lines"]
+            log_finding["diagnostics"] = primary_log_compact["diagnostics"][:8]
+            log_finding["progress"] = primary_log_compact["progress"]
         findings.append(log_finding)
 
     # --- Job script detection ---
@@ -1697,7 +2140,22 @@ def _inspect_run_dir(
             "subdirs": output_dirs[:8],
         })
 
-    findings.extend(_component_output_findings(p, question))
+    declared_components = _declared_components_from_param(required_components, saveplot_blocks)
+    inventory_components = sorted(
+        {
+            comp
+            for item in p.iterdir()
+            if item.is_dir() and (comp := _component_from_dir_name(item.name)) is not None
+        }
+        | set(declared_components)
+    )
+    findings.append(_component_artifact_inventory(p, declared_components))
+    restart_inventory = _restart_inventory(p)
+    if restart_inventory["framework"] or restart_inventory["components"] or restart_inventory["restart_tree_candidates"]:
+        findings.append(restart_inventory)
+    output_artifacts = _component_output_artifacts(p, saveplot_blocks, inventory_components)
+    if output_artifacts["entries"]:
+        findings.append(output_artifacts)
 
     # --- Evidence from question ---
     evidence: list[dict[str, Any]] = []
@@ -1712,7 +2170,7 @@ def _inspect_run_dir(
         evidence = [raw_result_to_evidence_item(r) for r in raw.get("results", [])]
 
     summary = (
-        f"Run directory '{path_str}': {len(files_found)} items. "
+        f"Run directory '{path_str}': {total_top_level_items} items. "
         f"Status: {run_status}. "
         f"PARAM.in: {param_status}. "
         f"Logs: {len(log_candidates)}. "
@@ -2179,7 +2637,7 @@ def inspect_artifact(
     findings: list[dict[str, Any]] = []
     summary = ""
 
-    if resolved_type == "log":
+    if resolved_type in {"log", "runlog"}:
         summary, findings = _inspect_log(path, resolved_question)
     elif resolved_type == "param":
         summary, findings, evidence = _inspect_param(path, resolved_question, swmf_root_str)
@@ -2195,6 +2653,10 @@ def inspect_artifact(
     # Known unknowns per type
     known_unknowns_by_type: dict[str, list[str]] = {
         "log": [
+            "Only static analysis performed; no runtime context consulted.",
+            "Component detection based on log line prefixes; may miss components with non-standard output.",
+        ],
+        "runlog": [
             "Only static analysis performed; no runtime context consulted.",
             "Component detection based on log line prefixes; may miss components with non-standard output.",
         ],
@@ -2243,7 +2705,7 @@ def register(app: Any) -> None:
         description=(
             "Inspect one specific local SWMF artifact deeply. "
             "artifact_type must be one of: 'log', 'param', 'xml', 'run_dir', "
-            "'build_output', 'result'. "
+            "'build_output', 'result'. 'runlog' is accepted as a log alias. "
             "Use for debugging log files, inspecting PARAM.in structure, validating "
             "run directories, or examining build output. Start debugging tasks here "
             "before calling get_evidence. "
@@ -2251,8 +2713,8 @@ def register(app: Any) -> None:
             "simulation time; param extracts sessions, component map, includes, external "
             "refs, command timeline, control settings, and #SAVEPLOT blocks; xml lists "
             "commands from PARAM.XML; run_dir checks artifact presence (SWMF.SUCCESS/DONE), "
-            "summarizes PARAM.in intent, discovers logs with first-error, and finds job "
-            "scripts; build_output checks SWMF root markers or compile/linker errors; "
+            "summarizes PARAM.in intent, discovers logs with first-error, summarizes "
+            "component output artifacts compactly, and finds job scripts; build_output checks SWMF root markers or compile/linker errors; "
             "result detects binary vs text format and previews structured SWMF output headers."
         )
     )(inspect_artifact)

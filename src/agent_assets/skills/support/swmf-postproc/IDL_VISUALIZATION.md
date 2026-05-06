@@ -82,9 +82,10 @@ use IDL as the renderer by default and use SWMF IDL macros before custom
 graphics:
 
 1. Inspect the named run directory or result file with MCP. Use the evidence only
-   to identify the artifact, variables, frame groups, and first/middle/last
-   frames (`first_frame`, `middle_frame`, `last_frame`); do not manually
-   reconstruct the plotted data unless IDL cannot run.
+   to identify the artifact, variables, output groups, and example filenames;
+   do not manually reconstruct the plotted data unless IDL cannot run. Never
+   open or parse SWMF output files with common command-line tools; use IDL/SWMF
+   procedures for the data.
 2. Retrieve deterministic IDL evidence for the chosen SWMF entrypoint and for
    `func`, `plotmode`, and `export`.
 3. Create an `analysis/` directory next to the relevant output files and write a

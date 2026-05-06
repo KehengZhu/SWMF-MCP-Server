@@ -26,8 +26,19 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ### Output interpretation
 1. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
    - output file inventory and layout
+   - use `run_dir_layout`, `postproc_state`,
+     `component_artifact_inventory`, `restart_inventory`, and
+     `component_output_artifacts` as the authority for artifact selection
+   - after this, read the whole run-local `PARAM.in` yourself and understand
+     the run intent, sessions, component setup, stops/runs, save cadence, and
+     relevant command blocks before interpreting outputs
+   - do not directly read whole runlogs or component directories unless tool
+     evidence is missing/unreadable or the user asks for raw content
    - compact runlog status if logs are present; do not directly read whole
      runlogs unless the user explicitly requests raw log content
+   - if deeper runlog investigation is needed, call
+     `inspect_artifact(artifact_type="runlog", path=<runlog>)` on the specific
+     runlog listed by run-dir inspection
 2. `get_evidence(mode="keyword", goal="output format or field definition")`
    - field semantics, output variable definitions
 3. `get_evidence(query="postprocessing", task_type="analysis", goal="postprocessing")`
@@ -36,8 +47,17 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ### IDL visualization
 1. If a run directory or output file is named, first call `inspect_artifact(artifact_type="run_dir"|"result", path=<path>)`
    - deterministic artifact type, output layout, and likely plot files
-   - for `run_dir`, include PARAM-derived context (session timeline, control settings, and `#SAVEPLOT` essentials)
+   - for `run_dir`, then read the run-local `PARAM.in` completely and reason
+     from the actual file contents; do not rely on `inspect_artifact` for
+     PARAM semantics beyond brief presence/counts and output-artifact matching
+   - for `run_dir`, use `run_dir_layout`, `postproc_state`,
+     `component_artifact_inventory`, `restart_inventory`, and
+     `component_output_artifacts` before reading raw artifacts
    - prefer an existing extracted run directory over an archive when both are present; for `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01` and treat `Run_Max_RP_CME3.tar.gz` only as a fallback/source archive
+   - never open or parse `.out`, `.outs`, `.idl`, `.sav`, `.tec`, `.dat`, or
+     other SWMF output files with common command-line tools (`cat`, `head`,
+     `tail`, `grep`, Python binary readers, ad hoc parsers); use SWMF/IDL
+     scripts and procedures selected from evidence
 2. Normalize the user prompt before retrieval:
    - named procedure or workflow: `plot_data`, `show_data`, `read_data`, `animate_data`, `plot_log_data`, `read_log_data`
    - inventory request: `list IDL plotting procedures`
@@ -60,6 +80,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ## Helper skills allowed
 
 * `swmf-postproc` — for IDL visualization details and coupling architecture context
+* `swmf-debug` — for clear runtime failures reported by run-dir or log evidence
 * `swmf-exact-lookup` — for specific field name or procedure confirmation
 
 ## Outputs
