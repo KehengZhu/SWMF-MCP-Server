@@ -406,18 +406,32 @@ Output is fact-only. The skill draws conclusions.
 
 ### 5.4 Extension interface: `swmf-params` rules directory
 
-The `swmf-params` support skill owns a rules directory the user grows over time. This is the **single backstop** for everything the agent does not yet know about valid PARAM construction. Both MCP and the skill consume from it:
+The `swmf-params` support skill owns a rules directory the user grows over time. This is the **single backstop** for everything the agent does not yet know about valid PARAM construction — and, equally important, everything the spec does not supply but a working PARAM still needs. Both MCP and the skill consume from it:
 
 ```
 src/agent_assets/skills/support/swmf-params/rules/
-  physical_constraints.yaml   # deterministic if/then rules, evaluated by MCP
-  numerical_practices.md      # narrative best practices, loaded by the skill
-  case_recipes/
-    awsom_steady_sc.md        # multi-session structure for steady-state SC
-    awsom_cme_eruption.md     # background → eruption session reshaping
-    sofie_mflampa.md          # SOFIE+MFLAMPA SEP follow-up structure
-    geospace_gmie.md          # geospace coupling case (future)
+  physical_constraints.yaml   # CONSTRAIN — if/then validation rules, evaluated by MCP
+  numerical_practices.md      # narrative best practices, loaded by skill (tie-breaker)
+  case_recipes/               # STRUCTURE — multi-session skeletons per archetype
+    awsom_steady_sc.md
+    awsom_cme_eruption.md
+    sofie_mflampa_cme.md
+    geospace_gmie.md          # future
+  templates/                  # ANCHOR — template-pair manifests per archetype
+    sofie_mflampa_cme.yaml
+    awsom_cme.yaml
+    awsomr_cme.yaml
+  derivations/                # DERIVE — formulas mapping spec → PARAM values
+    geometric.yaml            # CMEbox, coneIH rotation, MFLAMPA #ORIGIN, etc.
+    spheromak_shape.yaml
+    build_flags.yaml
+  defaults/                   # DEFAULT — operational defaults for fields spec doesn't address
+    cme_eruption.yaml
+    session_ladders.yaml
+    ops_guards.yaml           # CpuTimeMax, DtUpdateB0, MinimumPressure, etc.
 ```
+
+The four lanes (constrain / derive / structure / default) plus the template anchor cover every value class the agent needs to produce. Each lane has the same maintenance contract: **append a YAML/MD file, no code change**. New predicate or expression types are the only changes that touch MCP code.
 
 #### 5.4.1 `physical_constraints.yaml`
 
@@ -469,14 +483,178 @@ One markdown file per case archetype. Each recipe specifies the **multi-session 
 
 A recipe is *not* a template. It documents the structure; the template instantiates it for one parameterization.
 
-#### 5.4.4 Maintenance contract
+#### 5.4.4 `templates/` — ANCHOR
 
-- Adding a new rule: append to `physical_constraints.yaml`. No code change.
-- Adding a new narrative practice: append to `numerical_practices.md`. No code change.
-- Adding a new case archetype: add a new file under `case_recipes/`. No code change.
-- Schema changes to `physical_constraints.yaml` (new predicate types): require MCP code change in `inspect_artifact(artifact_type="param")` rule evaluator. Treat these as MCP API changes and version them.
+YAML manifests pairing a case archetype with its closest-precedent template(s) and required overrides. The skill loads `templates/<archetype>.yaml` immediately after archetype detection.
 
-This is the user's primary leverage point. Every time the agent silently fills in a value during replication and the user disagrees, the fix belongs here.
+```yaml
+# templates/sofie_mflampa_cme.yaml
+id: sofie_mflampa_cme_pair
+case_archetype: sofie_mflampa_cme
+start_template: SWMFSOLAR/Param/PARAM.in.sofie.CCMC
+restart_template: SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA
+required_flag_overrides:
+  - target: config_pl_sc
+    from: "u=Awsom"
+    to: "u=AwsomR"
+    why: "Spec implies AWSoM-R via 2-temperature SaMhd; no shipped template carries this combination."
+  - target: config_pl_ih
+    from: "u=Awsom"
+    to: "u=AwsomR"
+recipe: case_recipes/sofie_mflampa_cme.md
+secondary_precedents:
+  - SWMFSOLAR/Param/PARAM.in.sofie.CME
+  - SWMFSOLAR/Param/PARAM.in.awsomr.CME
+  - SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in
+```
+
+Without this file the agent re-derives template selection on every call via `get_evidence`; with it the answer is a single-file lookup. New archetypes are added by dropping a new YAML.
+
+A `templates/<archetype>.yaml` is required for any archetype the user wants the agent to produce confidently. If none exists, `swmf-replicate` falls back to evidence-based template discovery and the answer's `template_choice` field is tagged `provenance=inferred` rather than `provenance=manifest`.
+
+#### 5.4.5 `derivations/` — DERIVE
+
+YAML files describing **how to compute** PARAM values from spec inputs and template-resolved context. Each entry has `applies_when` (precondition), `produces` (output sites + expressions), `assumptions` (values the user may want to override), and `evidence` (where the rule was learned). The skill loads every YAML in `derivations/`; the agent (LLM) evaluates each entry whose precondition matches.
+
+```yaml
+# derivations/geometric.yaml
+- id: cmebox_from_fr_and_cone
+  applies_when:
+    case_archetype: [sofie_mflampa_cme, awsom_cme_eruption]
+    spec_has: [fr_longitude, fr_latitude, cone_opening_lon, cone_opening_lat]
+  produces:
+    target: amr_region.CMEbox
+    fields:
+      Coord1MinBox: 1.1
+      Coord1MaxBox: 22
+      Coord2MinBox: "{fr_longitude} - {cone_opening_lon}/2"
+      Coord2MaxBox: "{fr_longitude} + {cone_opening_lon}/2"
+      Coord3MinBox: "{fr_latitude}  - {cone_opening_lat}/2"
+      Coord3MaxBox: "{fr_latitude}  + {cone_opening_lat}/2"
+  assumptions:
+    - "Cone opening angles in spec are full angles, not half-angles."
+    - "CMEbox radial extent fixed at 1.1–22 Rs (template default)."
+  evidence: "CCMC weihao standard answer; SWMFSOLAR Run_Max_RP_CME3/run01."
+
+- id: coneih_rotation_from_fr
+  applies_when:
+    case_archetype: [sofie_mflampa_cme, awsom_cme_eruption]
+    spec_has: [fr_longitude, fr_latitude]
+  produces:
+    target: amr_region.coneIH_CME
+    fields:
+      xrotate: 0.0
+      yrotate: "-{fr_latitude}"
+      zrotate: "{fr_longitude}"
+  evidence: "Standard SWMF AMRREGION conex rotated convention."
+
+- id: mflampa_origin_from_spec_ranges
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    spec_has: [mflampa_lon_min, mflampa_lon_max, mflampa_lat_min, mflampa_lat_max]
+  produces:
+    target: SP.#ORIGIN
+    fields:
+      ROrigin: 2.5
+      LonMin: "{mflampa_lon_min}"
+      LonMax: "{mflampa_lon_max}"
+      LatMin: "{mflampa_lat_min}"
+      LatMax: "{mflampa_lat_max}"
+
+- id: relaxation_stop_from_smoothing
+  applies_when:
+    case_archetype: [sofie_mflampa_cme, awsom_cme_eruption]
+    spec_has: [cme_traveling_time, smoothing_factor]
+  produces:
+    target: restart_PARAM.session_relaxation.#STOP.tSimulationMax
+    expression: "{smoothing_factor} * {cme_traveling_time}"
+  evidence: "CCMC weihao convention: relaxation tail = smoothing × CME time."
+```
+
+Predicate vocabulary the agent must understand (extendable list, but new predicates require an MCP/skill update if they introduce semantics the LLM cannot already evaluate):
+
+- `case_archetype` — set match against the resolved archetype.
+- `spec_has` — all listed spec fields are present in the normalized spec.
+- `command_present` / `command_absent` — same as in `physical_constraints.yaml`.
+- `cme_block_type` — match against resolved `TypeCme` (e.g. `SPHEROMAK`, `GL`, `TitovDemoulin`).
+- `template_id` — applies only when a specific template manifest is in use.
+
+Output expressions use `{spec_field}` and `{template_field}` for substitution and standard arithmetic operators. The agent (LLM) is the evaluator — no MCP code is needed unless predicates or operators are added.
+
+Every derivation that fires must be reported in the skill output's per-value provenance (§4.1.5) as `provenance=derivation:<id>`.
+
+#### 5.4.6 `defaults/` — DEFAULT
+
+YAML files supplying **operational defaults** for fields the spec does not address and the template does not own. Apply only after spec / derivation / recipe / template have all failed to supply a value.
+
+```yaml
+# defaults/cme_eruption.yaml — operational scalar defaults
+- id: spheromak_shape_defaults
+  applies_when: { cme_block_type: SPHEROMAK }
+  defaults:
+    "#CME.Stretch": 0.6
+    "#CME.ApexHeight": 0.72
+    "#CME.iHelicity": 1
+    "#CME.DecayCme": -1
+  assumptions:
+    - "iHelicity=1 corresponds to right-handed FR; surface for confirmation if observation suggests otherwise."
+  evidence: "CCMC operational default; matches CCMC weihao standard answer."
+
+- id: cme_ops_guards
+  applies_when: { case_archetype: [sofie_mflampa_cme, awsom_cme_eruption] }
+  defaults:
+    "#CPUTIMEMAX.CpuTimeMax": "44 h"
+    "#HELIOUPDATEB0.DtUpdateB0": 300
+    "#COUPLE1.SC->SP.DtCouple": 120
+    "#COUPLE1.IH->SP.DtCouple": 120
+
+# defaults/session_ladders.yaml — iteration count ladders per archetype
+- id: sofie_mflampa_steady_ladder
+  case_archetype: sofie_mflampa_cme
+  param_file: start
+  ladder:
+    - {session: 1, MaxIter: 70000, role: initial_AMR_in_SC}
+    - {session: 2, MaxIter: 80000, role: freeze_SC_AMR}
+    - {session: 3, MaxIter: 80001, role: enable_IH_couple}
+    - {session: 4, MaxIter: 84000, role: enable_IH_AMR}
+    - {session: 5, MaxIter: 85000, role: freeze_IH_AMR}
+  scaling: "Tuned for the CCMC weihao grid resolution. Scale proportionally for denser/coarser grids and verify convergence in log file before relying."
+  evidence: "Weihao_Liu_011326_SH_1 standard answer."
+```
+
+Defaults differ from derivations in two ways: (a) they do not require any spec input — they fire for the archetype alone; (b) they are explicitly overridable by a user value during the launch gate without surfacing as a discrepancy. Every applied default is reported as `provenance=default:<id>`.
+
+The same `assumptions` field that flags caveats in derivations also applies here. A default with an `assumptions` block surfaces those notes during the launch gate even though the value itself does not block.
+
+#### 5.4.7 The authoring ladder (how the lanes compose)
+
+For every PARAM value the agent emits, the skill walks a fixed ladder. The first step that supplies the value wins; the agent records which step in the per-value provenance:
+
+| Step | Lane | Provenance tag |
+| --- | --- | --- |
+| 1 | Spec field, direct (§6.7.1) | `spec` |
+| 2 | Derivation matches and computes (§5.4.5) | `derivation:<id>` |
+| 3 | Recipe specifies a session-structural slot value (§5.4.3) | `recipe:<id>` |
+| 4 | Template carries the value as-is (§5.4.4 / §6.7.4) | `template:<path>` |
+| 5 | Default applies (§5.4.6) | `default:<id>` |
+| 6 | Narrative practice resolves a tie (§5.4.2) | `practice:<entry>` |
+| 7 | Nothing supplies the value | `gap` → user prompt |
+
+Validation rules (§5.4.1) and `Scripts/TestParam.pl` run on the *result* at the launch gate (§6.5.5); they are not part of authoring. The ladder is therefore "produce, then validate" — the four authoring lanes feed the ladder; the constraint lane is the gate.
+
+Every step in the ladder is **append-only extendable**: adding a new derivation, default, recipe, or template manifest is a YAML drop. The user grows the system by closing one rung at a time on the cases that matter.
+
+#### 5.4.8 Maintenance contract
+
+- New validation rule: append to `physical_constraints.yaml`. No code change.
+- New narrative practice: append to `numerical_practices.md`. No code change.
+- New case archetype: add files under `case_recipes/`, `templates/`, and (where relevant) `defaults/`. No code change.
+- New derivation: append a YAML entry to `derivations/<topic>.yaml`. No code change.
+- New operational default: append a YAML entry to `defaults/<topic>.yaml`. No code change.
+- New template-pair manifest: drop a YAML in `templates/`. No code change.
+- Schema changes to predicate vocabulary (`physical_constraints.yaml`) or derivation expression operators: require MCP / skill code change. Treat as API changes and version them.
+
+This is the user's primary leverage point. Every time the agent silently fills in a value during replication and the user disagrees, the fix belongs in one of the four lanes — not in the skill prompt and not in MCP code.
 
 ---
 
@@ -583,23 +761,24 @@ The dict and the resulting diff are recorded in skill output. Failure modes are 
 
 #### 6.5.4 Construction procedure
 
-1. Skill picks the **closest-precedent template** from SWMFSOLAR `Param/` or a prior run, and the matching **case recipe** from `swmf-params/rules/case_recipes/`.
-2. Agent reads the template directly. Agent reads the case recipe to understand the target multi-session skeleton.
-3. Agent enumerates the **delta**: what command blocks must be added, removed, reordered, or have their values changed; which session boundaries shift.
-4. For each delta item, agent gathers evidence: PARAM.XML schema (authoritative), prior-run example (precedent), `physical_constraints.yaml` and `numerical_practices.md` (rules and narrative).
-5. Agent **writes PARAM.in directly** via Edit/Write at the assembled run directory path. Composition is workflow reasoning; this is agent territory.
-6. Where a sub-block within the construction is itself a sweep (e.g. plugging the GL flux-rope numbers from the spec into the new `#CME` block), the agent may shell `change_param.py` for that sub-step after the structural edit is in place.
-7. Validation gate (§6.5.5) runs.
+1. Skill resolves the **case archetype** from the normalized spec (e.g. `sofie_mflampa_cme`).
+2. Skill loads `swmf-params/rules/templates/<archetype>.yaml` (§5.4.4) to obtain the template pair, required flag overrides, and recipe pointer. Falls back to evidence-based template selection if no manifest exists, marking the choice as `provenance=inferred`.
+3. Agent reads the resolved template(s) and the case recipe (§5.4.3).
+4. Agent enumerates the **delta**: command blocks to add, remove, reorder, or revalue; session boundaries that shift.
+5. For each value the agent emits, it walks the **authoring ladder** (§5.4.7) and records the supplying step as the value's provenance: `spec` → `derivation` → `recipe` → `template` → `default` → `practice` → `gap`. Steps 2–6 are YAML-driven; the agent does not invent values.
+6. Agent **writes PARAM.in directly** via Edit/Write at the assembled run-directory path. Both files (start + restart, §6.6) are produced when the archetype requires it.
+7. Where a sub-block within the construction is itself a sweep (e.g. plugging the FR numbers from the spec into the new `#CME` block), the agent may shell `change_param.py` for that sub-step after the structural edit is in place.
+8. Validation gate (§6.5.5) runs.
 
 The skill output contract requires the agent to record:
 
-- which template was the base,
+- which template manifest (or evidence-derived template) was the base,
 - which case recipe was followed,
 - the structural delta (added/removed/reordered command blocks, session changes),
-- per-value provenance (spec-stated | prior-run | template-default | rule-derived | user-confirmed),
-- explicit list of values the agent inferred and could not source (these become user-approval items).
+- per-value provenance using the §5.4.7 ladder tags (`spec` | `derivation:<id>` | `recipe:<id>` | `template:<path>` | `default:<id>` | `practice:<entry>` | `gap`),
+- explicit list of `gap` values (these become user-approval items and represent extension opportunities — closing one is a YAML edit in `derivations/` or `defaults/`).
 
-The agent **must not** invent numerical values. If a spec is silent on a parameter and no template/recipe/rule supplies it, the skill reports the gap and asks the user.
+The agent **must not** invent numerical values. If a spec is silent on a parameter and the authoring ladder produces `gap`, the skill reports the gap and asks the user. Each closed gap is a candidate YAML entry the user can add to the rules directory so the next replication run does not re-ask.
 
 #### 6.5.5 Pre-launch validation gate (mandatory)
 
@@ -623,6 +802,109 @@ Even with this gate, autonomous launch on novel cases is not safe. The plan assu
 
 The rules directory (§5.4) is the user's leverage. Every silent-wrong-PARAM incident in practice should produce one of: a new rule in `physical_constraints.yaml`, a new entry in `numerical_practices.md`, or a new file under `case_recipes/`. The system gets safer over time without MCP changes.
 
+### 6.6 Two-PARAM start+restart split
+
+CCMC CME cases (and most AWSoM-R/SOFIE eruption runs) ship **two** PARAM.in files, not one. The skill must treat the pair as a single deliverable.
+
+- **`PARAM.expand.start`** — steady-state background. SC+IH only, `#TIMEACCURATE F`, multi-session iteration ladder (initial AMR → freeze AMR → couple SC↔IH → IH AMR), terminating in `#SAVERESTART`. No `#CME` block.
+- **`PARAM.expand.restart`** — time-accurate eruption. `#INCLUDE RESTART.in`, `#INCLUDE SC/restartIN/restart.H`, `#INCLUDE IH/restartIN/restart.H`. Adds `#CME` in SC, `#FIELDLINE`/`#PARTICLELINE` for SP, and the diagnostic `#SAVEPLOT` blocks (LASCO C2/C3, EUVI A/B, AIA, shock surface). Ends with the relaxation session.
+
+Implications for `swmf-replicate`:
+
+- Produce both PARAMs for any structured-spec or paper CME run.
+- Plan a **two-stage submission**: build → submit start → wait for `SWMF.SUCCESS` and confirm `SC/restartOUT/` + `IH/restartOUT/` populated → swap PARAM.in for the restart variant → resubmit. The skill output's `launch_command` field expands to a list, not a single string.
+- Restart linkage is by file convention (`#INCLUDE` against `restartIN/restart.H`); the skill verifies the start run produced these before swapping.
+- `case_recipes/awsom_cme_eruption.md` must call out this split explicitly. A recipe that documents only one PARAM is incomplete.
+- `compare_artifacts(comparison_type="run_dir")` PARAM-delta extension must compare like-to-like: start vs start, restart vs restart.
+
+A merged single-PARAM is possible in principle but operationally fragile — any failure mid-eruption forces a full background re-run rather than a checkpointed restart. The split is the operational standard and the recipe enforces it.
+
+### 6.7 Worked example: spec → PARAM mapping
+
+Anchor case: `examples/CCMC_run_weihao/`. The directory contains the CCMC structured spec (`Run information_CCMC.md`), the standard-answer PARAM files (`Weihao_Liu_011326_SH_1_PARAM.expand.start`, `..._PARAM.expand.restart`), and the input magnetogram (`mrzqs230224t1904c2268_303.fits`). This is the **gold target** for the Phase 2 exit criterion (§7.2).
+
+#### 6.7.1 Spec values that map directly into PARAM
+
+| Spec field | PARAM site (file → command → param) | Notes |
+| --- | --- | --- |
+| Date `2023/02/24 20:29` | start → `#STARTTIME` | Direct |
+| Poynting ratio `0.4` | start+restart → `#POYNTINGFLUX` PoyntingFluxPerBSi=`0.4e6` | Convention `0.4 → 0.4e6 J/m²/s/T` |
+| Coronal Heating `1.5` | start+restart → `#CORONALHEATING` LperpTimesSqrtBSi=`1.5e5` | Convention `1.5 → 1.5e5` |
+| FR Longitude `33` | restart → SC `#CME` LongitudeCme | Direct |
+| FR Latitude `26` | restart → SC `#CME` LatitudeCme | Direct |
+| FR_orientation `268.62` | restart → SC `#CME` OrientationCme | Direct |
+| FR_radius `0.52` | restart → SC `#CME` Radius | Direct |
+| FR_bstrength `20.98` | restart → SC `#CME` BStrength | Direct |
+| CME speed `1276` | restart → SC `#CME` uCme | Direct |
+| CME traveling time `43200` | restart → eruption-session `#STOP` tSimulationMax | Eruption phase end |
+| MFLAMPA nLat/nLon `15`/`15` | restart → SP `#GRIDNODE` | Direct |
+| MFLAMPA Lon/LatMin/Max | restart → SP `#ORIGIN` | Four values, direct |
+| MFLAMPA MeanFreePath0 `0.3` | restart → SP `#USEFIXEDMFPUPSTREAM` | Direct |
+| MFLAMPA SpectralIndex `5` | restart → SP `#MOMENTUMBC` SpectralIndex | Direct |
+| MFLAMPA Efficiency `0.1` | restart → SP `#MOMENTUMBC` EfficiencyInj | Direct |
+| Magnetogram FITS | start+restart → `#HARMONICSFILE SC/mf.dat` | FITS is the input; `mf.dat` is harmonics derived in-rundir before launch |
+
+#### 6.7.2 Spec values requiring geometric derivation
+
+| Spec input | Derived PARAM value | Derivation |
+| --- | --- | --- |
+| FR Lon/Lat + Cone opening (Lon=20.87, Lat=10.44) | start+restart → `#AMRREGION CMEbox` LongMin/Max=22.565/43.435, LatMin/Max=20.78/31.22 | `Lon ± OpeningLon/2`, `Lat ± OpeningLat/2`. Recipe documents whether opening is full or half-angle. |
+| FR Lon/Lat | restart → `#AMRREGION coneIH_CME` yrotate=−Lat=−26, zrotate=Lon=33 | Convention: rotate cone axis to point at FR center. |
+| Smoothing factor `2` × CME time `43200` | restart → final `#STOP` tSimulationMax=`86400` | Relaxation tail = (smoothing − 1) × CME time. |
+| Quick Look list (LASCO C2 brightness/running diff/base diff; EUVI A/B; AIA; in-situ at STA/STB/Earth) | restart → SC `#SAVEPLOT` (`los ins idl_ascii soho:c2`, `... soho:c3`, `los ins idl_ascii sta:euvi stb:euvi sdo:aia`) plus three `#SATELLITE` MHD blocks for earth/sta/stb | Recipe-driven mapping from CCMC quick-look targets → plot block + lookup-table load. |
+
+#### 6.7.3 Spec values that require explicit user judgment
+
+| Spec field | Issue | Required handling |
+| --- | --- | --- |
+| FR_type `GL` | Standard PARAM uses `TypeCme=SPHEROMAK`, not `GL`. CCMC submission form labels both as "GL flux rope"; the operational SWMF model is SPHEROMAK with GL-shaped parameters. | Skill surfaces the discrepancy and requests user confirmation before launch. Add seed rule `cme_typecme_matches_spec_fr_type` to `physical_constraints.yaml` (severity=block when the translation is unconfirmed). |
+| Cone opening angle convention | Spec lists "Cone opening angle: Longitude=20.87, Latitude=10.44" without specifying full vs half. CMEbox derivation above assumes full-angle (matches the standard answer). | Recipe documents the convention; surface in skill output as `cme_box.derivation_assumption=full_angle`. |
+| Smoothing factor semantics | Spec says `Smoothing factor: 2`. Standard PARAM uses this as the multiplier on CME-time for relaxation tail; not all archetypes do. | Recipe-scoped convention; surface explicitly. |
+
+#### 6.7.4 PARAM content not in spec at all (template- and recipe-supplied)
+
+By count, the spec contributes ~25 values; the two PARAMs hold ~400 commands. Everything else is template- or recipe-derived:
+
+- Component map and `Config.pl` options (`-v=SC/BATSRUS,IH/BATSRUS,SP/MFLAMPA`, `-o=SC:u=AwsomR,e=AwsomSA,ng=2,g=8,8,4`, IH variant, `-o=SP:g=20000`).
+- Multi-session structure: 4 sessions for `start`, 4 sessions for `restart` (eruption → SC-relax → IH-only → tail).
+- Session iteration counts (70000, 80000, 80001, 84000, 85000) — convergence-tuned, expert-set.
+- AMR criteria, resolutions, and region geometry beyond the FR-derived box (`InnerShell`, `OuterShell`, `polar`, `IHbox`, `coneearth`).
+- Grid roots, geometry types (`spherical_lnr` for SC, `roundcube` for IH with `rRound0=250`, `rRound1=375`), domain extents, buffer-grid sizing.
+- Schemes (Sokolov, mc3, β=1.2, nStage=2, CFL=0.8) per component.
+- Coupling cadences (`#COUPLE1` SC↔IH `Dn=1`; SC,IH↔SP `Dt=120 s`).
+- Threaded field-line and SaMhd flags (`#FIELDLINETHREAD`, `#PLOTTHREADS`, `#ALIGNBANDU`).
+- Lookup-table loads (RadCoolCorona, TR, los_tbl, los_Eit_cor, los_EuviA, los_EuviB).
+- Restart cadence, log variables, plot variable lists, particle-line settings.
+- SPHEROMAK shape parameters not in spec: `Stretch=0.6`, `ApexHeight=0.72`, `iHelicity=1`, `DecayCme=-1`.
+- Operational guards: `CpuTimeMax=44 h`, `DtUpdateB0=300 s`, `MinimumPressure`, `MinimumTemperature`, `MinimumRadialSpeed`.
+
+The skill must source each from one of: closest-precedent template, case recipe, prior run, or — if absent everywhere — an explicit user prompt. The list of "values agent could not source" is a required output field per §6.5.4.
+
+### 6.8 Required agent abilities (capability inventory)
+
+To execute §6.7 reliably, the agent (LLM + skill stack + MCP) must demonstrate:
+
+1. **Structured-spec extraction.** Parse a CCMC-style markdown table into typed fields. → MCP `inspect_artifact(artifact_type="ccmc_spec")` (Phase 2).
+2. **Closest-precedent template selection.** Given a normalized spec, identify the matching template family in SWMFSOLAR/Param/. Match on `(model, components, has_CME, has_MFLAMPA, has_threaded_gap)` tuples. → `swmf-replicate` evidence step 2.
+3. **Two-PARAM structural reasoning.** Recognize that a CME case decomposes into background + restart and produce both with correct cross-file references. → §6.6 + `case_recipes/awsom_cme_eruption.md`.
+4. **Multi-session reasoning.** Decide where session boundaries fall, what each session toggles (`#TIMEACCURATE`, `#DOAMR`, `#COMPONENT`, `#COUPLE1`), and how iteration counts ladder. The agent does not derive this from physics; it copies from the recipe and varies only what the spec demands. → `case_recipes/`.
+5. **Geometric derivation.** Compute AMR-region bounds and cone-rotation Euler angles from FR longitude/latitude/cone-opening. Pure arithmetic; conventions (full/half angle, sign of rotation) live in the recipe. → recipe + agent math.
+6. **Quick-look → diagnostic mapping.** Translate a CCMC "Quick Look Graphics" list into the corresponding `#SAVEPLOT` blocks and lookup-table loads. → recipe + `swmf-validation` reverse-mapping table.
+7. **Discrepancy detection.** Identify when a spec field disagrees with the template default in a way that requires user confirmation (e.g. spec FR_type=GL vs template TypeCme=SPHEROMAK). → rules directory + skill output `confirmed|inferred|assumed` separation.
+8. **Direct PARAM authoring.** Edit/Write structural changes on the assembled run-dir PARAM.in. `change_param.py` is not sufficient (§6.5.1).
+9. **Pre-launch validation operation.** Drive `inspect_artifact(artifact_type="param", check_rules=True)`, shell `Scripts/TestParam.pl`, surface the diff vs base, and gate on results. → §6.5.5.
+10. **Cluster-shell competence.** Run `Config.pl`, `make`, `sbatch`/`qsub`, `squeue`/`qstat`; recover from common failure modes (allocation, walltime, queue saturation). The skill does not embed credentials.
+11. **Output inventory + IDL execution.** Locate post-processed outputs and drive existing `swmf-postproc` IDL workflows (LASCO synthesis, satellite traces, shock surface).
+12. **Honest uncertainty reporting.** Every run-altering value is tagged `confirmed | inferred | assumed`, with `assumed` items blocking launch until the user confirms.
+13. **Authoring-ladder execution.** For every emitted PARAM value, walk the §5.4.7 ladder (spec → derivation → recipe → template → default → practice → gap), evaluate `derivations/*.yaml` and `defaults/*.yaml` entries whose preconditions match, perform the simple arithmetic and substitution in their `produces`/`expression` fields, and tag the result with the supplying lane. Adding a new value class is a YAML drop, not a skill prompt edit.
+
+What the agent cannot do, even with the full stack:
+
+- Invent FR shape parameters (`Stretch`, `ApexHeight`) when neither spec nor precedent provides them. Surface as `assumed` with a specific user prompt.
+- Pick AMR resolutions that diverge from the recipe. Resolution tuning is research; the skill stays on recipe rails or asks.
+- Decide multi-session iteration counts for an unprecedented case archetype. Adding a new archetype is a `case_recipes/` authoring task — owned by the user.
+- Validate physical correctness from a `Scripts/TestParam.pl` pass alone. Schema is necessary but not sufficient (§9.2).
+
 ---
 
 ## 7. Phased Rollout
@@ -637,11 +919,15 @@ Each phase has one entry-deliverable and an exit criterion that is testable from
 - `swmf-jobscript` support skill.
 - `inspect_artifact(artifact_type="jobscript")` extension.
 - `compare_artifacts(comparison_type="run_dir")` PARAM-delta extension.
-- **Rules directory skeleton** under `src/agent_assets/skills/support/swmf-params/rules/` with:
-  - `physical_constraints.yaml` containing 5–10 seed rules covering the most common AWSoM/CME pitfalls (the user authors these; the skill ships with a starter set).
-  - `numerical_practices.md` with a few seed entries.
-  - `case_recipes/awsom_cme_eruption.md` derived from `Run_Max_RP_CME3/run01`.
-- `inspect_artifact(artifact_type="param")` extended with `check_rules=True` consuming the YAML.
+- **Rules directory skeleton** under `src/agent_assets/skills/support/swmf-params/rules/` covering all four lanes (§5.4):
+  - `physical_constraints.yaml` — 5–10 seed validation rules for common AWSoM/CME pitfalls.
+  - `numerical_practices.md` — a few seed narrative entries.
+  - `case_recipes/awsom_cme_eruption.md` — derived from `Run_Max_RP_CME3/run01`.
+  - `templates/awsom_cme.yaml` — pairs the prior-run as the template anchor for the AWSoM-CME archetype, with no flag overrides (Phase 1 sweep mode only).
+  - `derivations/geometric.yaml` — at minimum `cmebox_from_fr_and_cone` and `coneih_rotation_from_fr` so the Phase 2 worked example (§6.7) has a foundation already in place.
+  - `defaults/ops_guards.yaml` — `CpuTimeMax`, `MinimumPressure`, `MinimumTemperature` defaults shared across archetypes.
+- Skill consumes `templates/`, `derivations/`, `defaults/` and walks the §5.4.7 authoring ladder; provenance tags appear in skill output for every emitted value.
+- `inspect_artifact(artifact_type="param")` extended with `check_rules=True` consuming `physical_constraints.yaml`.
 - All other support skills exist as stubs that delegate to `swmf-configure`/`swmf-run`/`swmf-analyze`.
 
 **Exit criteria**:
@@ -667,6 +953,7 @@ Each phase has one entry-deliverable and an exit criterion that is testable from
 - Agent given the CCMC markdown spec normalizes it, identifies needed magnetogram (date, type), classifies a local `mrzqs*.fits`, picks `Param/PARAM.in.sofie.MFLAMPA`, and produces a build plan including `Config.pl -v=Empty,SC/BATSRUS,IH/BATSRUS,SP/MFLAMPA` and `Config.pl -o=SC:u=Awsom,e=AwsomSA,...`.
 - `inspect_artifact(artifact_type="magnetogram")` returns CR + time + type for a real `mrzqs190801t0014c2220_229.fits` from the repo root.
 - `inspect_artifact(artifact_type="ccmc_spec")` returns typed fields for `Run information _ CCMC.md`.
+- **Gold target — `examples/CCMC_run_weihao/`.** Given the CCMC spec, the magnetogram FITS, and the SWMFSOLAR template + recipe, the agent produces both `PARAM.expand.start` and `PARAM.expand.restart` candidates. `compare_artifacts(comparison_type="run_dir")` PARAM-delta against the bundled standard-answer PARAMs is run; every delta is classified per §6.7.4 / §6.8 as one of `expected (template-default) | needs-recipe-update | needs-rule-update | confirmed-user-judgment`. Zero deltas in the `direct-mapping` set of §6.7.1; geometric-derivation deltas (§6.7.2) match exactly modulo numeric tolerance; FR_type discrepancy (§6.7.3) is surfaced and blocks launch until user confirms.
 
 **Gold prompts**:
 
@@ -745,6 +1032,10 @@ Carry forward the existing protocol's anti-patterns and add replication-specific
 - **`change_param.py` for structural changes.** Do not use `change_param.py` to insert a `#CME` block or reshape sessions. The script will silently no-op or hard-exit; either way the result is wrong. Structural edits are agent-written PARAM.in (§6.5.4).
 - **Inventing values to satisfy a rule.** If a rule fires `severity=block` and the spec is silent on the offending field, the skill must surface the gap to the user — not pick a "reasonable" value to make the gate green.
 - **Treating `Scripts/TestParam.pl` pass as physical correctness.** PARAM.XML conformance is necessary but not sufficient. A run can pass `TestParam.pl`, finish with `SWMF.SUCCESS`, and still be physically wrong. The rules directory and user approval are the substantive checks.
+- **Silent semantic translation.** Do not silently translate a spec field through a model-specific identity (e.g. spec `FR_type=GL` → PARAM `TypeCme=SPHEROMAK`) without surfacing it. Translations of this kind belong in the rules directory and the skill output's `inferred` section, with explicit user confirmation before launch.
+- **Producing a single PARAM for a CME case.** CCMC and most AWSoM-R CME runs are two-PARAM (background + restart). A skill that emits one merged PARAM either skips the steady-state background (physically wrong) or fuses sessions in a way that makes restart-from-checkpoint impossible (operationally wrong). See §6.6.
+- **Hardcoding domain knowledge in the skill body.** Per-case derivations, template pairings, operational defaults, session ladders, and SPHEROMAK-shape conventions all belong in the `swmf-params/rules/` lanes (§5.4), not in the skill prompt or the agent's prose memory. A skill that knows "for SOFIE+MFLAMPA use sofie.CCMC + sofie.MFLAMPA" only because the prose says so is non-extensible: every new archetype forces a skill edit. The skill must consume `templates/`, `derivations/`, `defaults/` as data; the user authors new YAML to teach new cases.
+- **Asking the user for the same gap on every run.** If a `gap` value (§5.4.7) recurs across runs, it should be promoted into the rules directory — a derivation if it's a function of the spec, a default if it's archetype-keyed, a recipe entry if it's structural. Re-prompting the user for the same value is a sign the system is not learning.
 
 ---
 
@@ -782,7 +1073,10 @@ Each marked decision the user should know was a tradeoff.
 - Five new support skills: `swmf-magnetogram`, `swmf-jobscript`, `swmf-cme-setup`, `swmf-validation`, `swmf-swmfsolar`.
 - MCP changes are typed extensions of `inspect_artifact` (`jobscript`, `magnetogram`, `ccmc_spec`, `paper_spec`, plus `check_rules=True` on `param`) and a `param_diff` block on `compare_artifacts(comparison_type="run_dir")`. No new public tools.
 - PARAM.in generation is two modes (§6.5): **sweep** uses `change_param.py`; **construction** is agent-written directly, guided by template + PARAM.XML + the `swmf-params/rules/` directory.
-- The rules directory (`physical_constraints.yaml` + `numerical_practices.md` + `case_recipes/`) is the user's extension interface for domain knowledge. New rules require zero MCP code change.
+- CME cases are **two-PARAM** (background + restart, §6.6); the skill produces both and orchestrates a two-stage submission.
+- A spec contributes a small minority of PARAM content (§6.7: ~25 spec values vs ~400 PARAM commands). The agent maps spec → PARAM via direct fields, geometric derivations, and recipe-driven mappings; everything else comes from the closest-precedent template and the case recipe. Required agent abilities are inventoried in §6.8.
+- The rules directory (§5.4) is the user's extension interface for domain knowledge, organized in four lanes — **constrain** (`physical_constraints.yaml`), **structure** (`case_recipes/`), **derive** (`derivations/`), **default** (`defaults/`) — anchored by template-pair manifests (`templates/`). Every PARAM value the agent emits is produced by walking the authoring ladder (§5.4.7) and tagged with the supplying lane. New domain knowledge is a YAML drop; only schema additions touch code.
 - A mandatory pre-launch gate runs MCP rule checks, `Scripts/TestParam.pl`, a PARAM diff, and explicit user approval. Hard-blocks on `severity=block` rule violations or schema errors.
+- The Phase 2 gold target is `examples/CCMC_run_weihao/`: agent reproduces both PARAM files against the bundled standard answers, with every delta classified.
 - Operational logic (download, build, submit, postproc) stays in SWMFSOLAR scripts the agent shells; MCP only inspects results.
 - Validation against papers/observations is skill-level, not MCP-level. Reference comparison is presented to the user; MCP does not adjudicate.
