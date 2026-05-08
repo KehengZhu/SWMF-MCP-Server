@@ -19,6 +19,9 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
 - User asks how to run → `swmf-run`
 - Something failed during a run → `swmf-debug`
 - User wants to change source behavior → consult `swmf-implementation` (support)
+- User wants to **replicate** an entire run from a paper, structured spec, or prior run
+  directory → `swmf-replicate`. `swmf-configure` handles edits to a single PARAM; full
+  case replication is multi-step and lives in the entry skill.
 
 ## Evidence order
 
@@ -26,10 +29,13 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
    ```
    get_evidence(query=<param_command>, mode="keyword", goal="param definition")
    ```
-2. For structural validation of a PARAM.in:
+2. For structural primitives (rule evaluation, include resolution, component map,
+   external-ref resolution) on a PARAM.in:
    ```
-   inspect_artifact(artifact_type="param", path=<PARAM.in_path>)
+   inspect_artifact(artifact_type="param", path=<PARAM.in_path>, check_rules=True)
    ```
+   For PARAM intent (sessions, control cadence, `#SAVEPLOT` meaning), read the
+   PARAM.in file directly. The inspector returns structural primitives only.
 3. For configuration scripts or `Config.pl` discovery:
    ```
    get_evidence(query=<config goal>, goal=<config goal>, module=<component>, task_type="configuration")
@@ -44,6 +50,10 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
 
 * `swmf-params` — for deep PARAM schema, validation, include resolution
 * `swmf-exact-lookup` — when exact command location or definition is needed
+* `swmf-cme-setup` — when a `#CME` block, GL/SPHEROMAK/Cone choice, or eruption-session
+  structure is involved.
+* `swmf-magnetogram` — when `#HARMONICSFILE`, `#FDIPS`, or magnetogram input files are
+  involved.
 
 ## Outputs
 

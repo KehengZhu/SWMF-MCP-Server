@@ -1,0 +1,25 @@
+# Iteration-count ladders per archetype. Apply at step 5 of the authoring ladder when
+# the spec is silent. Each ladder is calibrated to the CCMC standard-answer grid
+# resolution; users scale proportionally for denser/coarser grids and verify in the
+# runlog before relying on them.
+
+- id: sofie_mflampa_steady_ladder
+  case_archetype: sofie_mflampa_cme
+  param_file: start
+  ladder:
+    - {session: 1, MaxIter: 70000, role: initial_AMR_in_SC}
+    - {session: 2, MaxIter: 80000, role: freeze_SC_AMR}
+    - {session: 3, MaxIter: 80001, role: enable_IH_couple}
+    - {session: 4, MaxIter: 84000, role: enable_IH_AMR}
+    - {session: 5, MaxIter: 85000, role: freeze_IH_AMR}
+  scaling: "Tuned for the CCMC weihao grid resolution. Scale proportionally for denser/coarser grids."
+  evidence: "examples/CCMC_run_weihao: PARAM.expand.start session sequence."
+
+- id: awsom_cme_eruption_ladder
+  case_archetype: awsom_cme_eruption
+  param_file: restart
+  ladder:
+    - {session: 1, role: seed_and_propagate, t_simulation_max_from: cme_traveling_time}
+    - {session: 2, role: relaxation_tail, t_simulation_max_from: smoothing_factor_times_cme_traveling_time}
+  scaling: "Time-accurate sessions are bounded by spec-derived simulation time, not iteration counts."
+  evidence: "case_recipes/awsom_cme_eruption.md."

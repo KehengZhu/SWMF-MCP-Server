@@ -1,0 +1,19 @@
+# SPHEROMAK shape parameter derivations.
+#
+# These rules cover the *translation* layer between CCMC's "GL flux rope" labelling and
+# the operational SWMF SPHEROMAK family. They never run silently: every emission must be
+# surfaced through the launch gate's `inferred|assumed` block before the user confirms.
+
+- id: gl_to_spheromak_typecme
+  applies_when:
+    case_archetype: [sofie_mflampa_cme, awsom_cme_eruption]
+    spec_fr_type_in: [GL, gl, "GL flux rope"]
+  produces:
+    target: restart_PARAM.SC.#CME.TypeCme
+    fields:
+      TypeCme: SPHEROMAK
+  assumptions:
+    - "CCMC label 'GL' maps to operational PARAM TypeCme=SPHEROMAK; surface for user confirmation before launch."
+    - "Other GL-shaped variants exist (TitovDemoulin); confirm the discrepancy with the user, do not assume."
+  surface_as: inferred
+  evidence: "examples/CCMC_run_weihao standard answer: TypeCme=SPHEROMAK with FR_type=GL in CCMC spec."

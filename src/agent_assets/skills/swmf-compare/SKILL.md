@@ -28,7 +28,10 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
      question = <user question>
    )
    ```
-   Read `differences` for structural/value changes.
+   Read `differences` for structural/value changes. When `comparison_type="run_dir"`
+   and both sides have a `PARAM.in`, the response includes a `param_diff` entry with a
+   per-session command-name diff plus a unified text diff — surface this before falling
+   back to file-list deltas.
    Do not directly read whole runlogs unless the user explicitly requests raw
    log content; use bounded excerpts only after tool output names a need.
 
@@ -36,6 +39,9 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
    ```
    inspect_artifact(artifact_type="log"|"param"|"run_dir", path=<anomalous_path>)
    ```
+   The param inspector returns structural primitives only (sessions, includes,
+   component map, external refs, parser errors); read the PARAM.in directly
+   when you need to interpret the failing session or command flow.
 
 3. **Source grounding** (only if differences involve non-obvious config or code effect):
    ```
@@ -61,6 +67,8 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
 * `swmf-params` — if differences involve PARAM schema or validation
 * `swmf-postproc` / `swmf-analyze` — if comparison involves output visualization
 * `swmf-exact-lookup` — for specific changed symbol confirmation
+* `swmf-validation` — when one side is a reference (paper figure, observation, CCMC
+  quick-look) rather than another SWMF artifact
 * for broad IDL visualization, analysis, or output-comparison plotting, route
   through `swmf-postproc` instead of inventing IDL commands from diffs alone
 

@@ -1,0 +1,126 @@
+# Geometric derivations: spec → PARAM-value mappings.
+#
+# Loaded by the `swmf-params` / `swmf-replicate` skill. Each entry is evaluated by the
+# agent (LLM): if `applies_when` matches, compute the values in `produces` and tag the
+# emitted PARAM values with `provenance=derivation:<id>`.
+#
+# Predicates the agent must understand:
+#   case_archetype: <id> | [<id>, ...]
+#   spec_has:       [<spec_field>, ...]            all listed spec fields must be present
+#   command_present / command_absent: "<#CMD>"
+#   cme_block_type: <Type>                          match resolved TypeCme
+#   template_id:    <id>                            applies only when this template manifest is loaded
+#
+# Expressions in `produces` may reference {spec_field} and {template_field}, with
+# standard arithmetic operators evaluated by the agent.
+
+- id: cmebox_from_fr_and_cone
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [fr_longitude, fr_latitude, cone_opening_lon, cone_opening_lat]
+  produces:
+    target: amr_region.CMEbox
+    fields:
+      Coord1MinBox: 1.1
+      Coord1MaxBox: 22
+      Coord2MinBox: "{fr_longitude} - {cone_opening_lon} / 2"
+      Coord2MaxBox: "{fr_longitude} + {cone_opening_lon} / 2"
+      Coord3MinBox: "{fr_latitude}  - {cone_opening_lat} / 2"
+      Coord3MaxBox: "{fr_latitude}  + {cone_opening_lat} / 2"
+  assumptions:
+    - "Cone opening angles in spec are interpreted as full angles, not half-angles."
+    - "CMEbox radial extent fixed at 1.1..22 Rs (template default)."
+  evidence: "CCMC weihao standard answer; SWMFSOLAR/Run_Max_RP_CME3/run01."
+
+- id: coneih_rotation_from_fr
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [fr_longitude, fr_latitude]
+  produces:
+    target: amr_region.coneIH_CME
+    fields:
+      xrotate: 0.0
+      yrotate: "-{fr_latitude}"
+      zrotate: "{fr_longitude}"
+  assumptions:
+    - "Rotation convention: cone axis is rotated to point at the FR center; sign of yrotate is negative latitude."
+  evidence: "Standard SWMF AMRREGION conex rotated convention."
+
+- id: relaxation_stop_from_smoothing
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [cme_traveling_time, smoothing_factor]
+  produces:
+    target: restart_PARAM.session_relaxation.#STOP.tSimulationMax
+    expression: "{smoothing_factor} * {cme_traveling_time}"
+  assumptions:
+    - "Smoothing factor is applied to total elapsed simulation time, not as an additive tail."
+  evidence: "CCMC weihao convention: relaxation tail = smoothing × CME time."
+
+- id: mflampa_origin_from_spec_ranges
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    spec_has: [mflampa_lon_min, mflampa_lon_max, mflampa_lat_min, mflampa_lat_max]
+  produces:
+    target: restart_PARAM.SP.#ORIGIN
+    fields:
+      ROrigin: 2.5
+      LonMin: "{mflampa_lon_min}"
+      LonMax: "{mflampa_lon_max}"
+      LatMin: "{mflampa_lat_min}"
+      LatMax: "{mflampa_lat_max}"
+  assumptions:
+    - "ROrigin fixed at 2.5 Rs, matching the CCMC weihao standard answer."
+  evidence: "examples/CCMC_run_weihao restart: SP #ORIGIN."
+
+- id: mflampa_gridnode_from_spec
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    spec_has: [mflampa_nlat, mflampa_nlon]
+  produces:
+    target: restart_PARAM.SP.#GRIDNODE
+    fields:
+      nLat: "{mflampa_nlat}"
+      nLon: "{mflampa_nlon}"
+  evidence: "Spec → SP #GRIDNODE direct mapping."
+
+- id: poyntingflux_from_spec_ratio
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [poynting_ratio]
+  produces:
+    target: PARAM.SC.#POYNTINGFLUX
+    fields:
+      PoyntingFluxPerBSi: "{poynting_ratio} * 1e6"
+  assumptions:
+    - "CCMC convention: spec value 0.4 → 0.4e6 J/m^2/s/T (the spec is the dimensionless ratio in millions)."
+  evidence: "examples/CCMC_run_weihao: spec Poynting ratio=0.4 → PARAM 0.4e6."
+
+- id: coronalheating_lperp_from_spec
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [coronal_heating]
+  produces:
+    target: PARAM.SC.#CORONALHEATING
+    fields:
+      LperpTimesSqrtBSi: "{coronal_heating} * 1e5"
+  assumptions:
+    - "CCMC convention: spec value 1.5 → 1.5e5 (LperpTimesSqrtBSi unit)."
+  evidence: "examples/CCMC_run_weihao: spec Coronal Heating=1.5 → PARAM 1.5e5."
+
+- id: cme_block_from_spec
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+    spec_has: [fr_longitude, fr_latitude, fr_orientation, fr_radius, fr_bstrength, cme_speed]
+  produces:
+    target: restart_PARAM.SC.#CME
+    fields:
+      LongitudeCme: "{fr_longitude}"
+      LatitudeCme: "{fr_latitude}"
+      OrientationCme: "{fr_orientation}"
+      Radius: "{fr_radius}"
+      BStrength: "{fr_bstrength}"
+      uCme: "{cme_speed}"
+  assumptions:
+    - "Direct mapping; TypeCme is supplied separately (translation rule), and SPHEROMAK shape parameters come from defaults/cme_eruption.yaml."
+  evidence: "examples/CCMC_run_weihao: spec FR_*  → PARAM #CME fields."

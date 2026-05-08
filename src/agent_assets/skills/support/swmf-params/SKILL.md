@@ -37,23 +37,33 @@ get_evidence(
 )
 ```
 
-For structural validation:
+For structural primitives (rule evaluation, include + external-ref resolution,
+component map, parser-level errors):
 ```
 inspect_artifact(
   artifact_type = "param",
   path = <PARAM.in_path>,
-  question = <question>
+  question = <question>,
+  check_rules = True
 )
 ```
+
+The param inspector returns structural primitives only. For session intent, control
+cadence, `#SAVEPLOT` meaning, or any other semantic interpretation of the PARAM,
+**read the PARAM.in file directly**. Do not call this tool to "summarize" a PARAM.
 
 For run-level PARAM intent from an existing case:
 ```
 inspect_artifact(
   artifact_type = "run_dir",
-  path = <run_dir_path>,
-  question = "summarize PARAM sessions, control settings, and SAVEPLOT cadence"
+  path = <run_dir_path>
 )
 ```
+Then read the run-local `PARAM.in` directly for intent. The run-dir inspector
+surfaces a `run_dir_param_summary` finding with structural counts and a
+`component_output_artifacts` finding mapping `#SAVEPLOT` intent to discovered
+output files; use those before reading raw artifacts, but read PARAM.in for the
+session-by-session story.
 
 For source behavior (schema vs runtime divergence):
 ```

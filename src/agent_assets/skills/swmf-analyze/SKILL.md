@@ -82,6 +82,8 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 * `swmf-postproc` — for IDL visualization details and coupling architecture context
 * `swmf-debug` — for clear runtime failures reported by run-dir or log evidence
 * `swmf-exact-lookup` — for specific field name or procedure confirmation
+* `swmf-validation` — when the comparison is against a paper figure, observation trace, or
+  other non-SWMF reference rather than another SWMF artifact.
 
 ## Outputs
 

@@ -1487,6 +1487,7 @@ dependencies = [
     { name = "mcp", extra = ["cli"] },
     { name = "pip" },
     { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -1512,6 +1513,7 @@ requires-dist = [
     { name = "pip", specifier = ">=26.0.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["semantic", "semantic-gpu", "test"]
 

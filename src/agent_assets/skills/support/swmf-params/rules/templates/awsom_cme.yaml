@@ -1,0 +1,27 @@
+# Template-pair manifest for the AWSoM/AWSoM-R CME archetype.
+#
+# Loaded by `swmf-replicate` immediately after archetype detection. Phase 1 anchors the
+# archetype to the prior run; richer template options are added in Phase 2.
+
+id: awsom_cme_pair
+case_archetype: awsom_cme_eruption
+
+# Phase 1: prior-run-as-template (sweep mode). The agent reads this PARAM verbatim and
+# applies parameter substitutions only.
+start_template: SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in
+restart_template: SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in
+
+# Phase 2 will switch these to the canonical SWMFSOLAR templates once `swmf-cme-setup`
+# can drive construction-mode generation:
+#   start_template: SWMFSOLAR/Param/PARAM.in.awsomr.CME
+#   restart_template: SWMFSOLAR/Param/PARAM.in.awsom.CME
+
+required_flag_overrides: []
+
+recipe: case_recipes/awsom_cme_eruption.md
+
+secondary_precedents:
+  - SWMFSOLAR/Param/PARAM.in.awsomr.CME
+  - SWMFSOLAR/Param/PARAM.in.awsom.CME
+
+provenance: manifest

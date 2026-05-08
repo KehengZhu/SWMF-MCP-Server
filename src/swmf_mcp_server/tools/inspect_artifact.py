@@ -52,8 +52,15 @@ artifact_type : Required. One of:
                 "run_dir"     — entire run directory (inventory + layout)
                 "build_output"— build/configure output (file or root directory)
                 "result"      — generated output file (IDL save, netCDF, etc.)
+                "jobscript"   — cluster job script (SLURM/PBS/local)
+                "magnetogram" — solar magnetogram input (FITS, map_*.out, harmonics .dat)
+                "ccmc_spec"   — CCMC structured run-information markdown
+                "paper_spec"  — agent-authored JSON/YAML normalization of paper params
 path          : Required. Absolute or relative path to the artifact.
 question      : Optional. Freeform question to focus inspection.
+check_rules   : Optional. When True and artifact_type=="param", evaluate
+                physical_constraints.yaml against the parsed PARAM and attach
+                a rule_violations finding.
 swmf_root     : Optional explicit SWMF source root path.
 run_dir       : Optional run directory used for root resolution.
 """
@@ -76,6 +83,15 @@ from ..parsing.param_parser import parse_param_text
 from ..parsing.external_refs import extract_external_references_from_param_text
 from ..parsing.component_map import expand_component_map_rows
 from ..parsing.job_layout import find_likely_job_scripts, infer_job_layout_from_script
+from ..parsing.jobscript import parse_jobscript_file
+from ..parsing.magnetogram import parse_magnetogram_file
+from ..parsing.ccmc_spec import parse_ccmc_spec_file
+from ..parsing.paper_spec import parse_paper_spec_file
+from ..parsing.param_rules import (
+    DEFAULT_RULES_PATH,
+    evaluate_rules,
+    load_rules,
+)
 from ..parsing.xml_parser import parse_param_xml_file
 
 _VALID_ARTIFACT_TYPES = frozenset({
@@ -86,6 +102,10 @@ _VALID_ARTIFACT_TYPES = frozenset({
     "run_dir",
     "build_output",
     "result",
+    "jobscript",
+    "magnetogram",
+    "ccmc_spec",
+    "paper_spec",
 })
 _MAX_FILE_CHARS = 200_000  # guard against very large non-log text files
 _LOG_HEAD_LINES = 40
@@ -615,6 +635,122 @@ def _status_from_primary_log(marker_status: str, log_status: str | None) -> str:
     return marker_status
 
 
+# Cluster-boundary failure signatures. Each entry is
+#   (signature_id, recommended cluster recovery family, regex).
+# The regex is matched case-insensitively against compact log lines (head, tail,
+# diagnostics) so the pattern stays cheap. Patterns are deliberately narrow —
+# false positives degrade signal — and `recovery_family` is reported verbatim,
+# not used by MCP to take action.
+_CLUSTER_FAILURE_SIGNATURES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    (
+        "walltime_exceeded",
+        "resubmit_with_longer_walltime",
+        re.compile(
+            r"(?:DUE TO TIME LIMIT|TIME LIMIT exceeded|walltime\s+(?:limit|exceeded)|"
+            r"job killed: walltime|Job .* exceeded walltime)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "oom_killed",
+        "increase_memory_or_reduce_decomp",
+        re.compile(
+            r"(?:Out\s+Of\s+Memory|OOM[ -]?Killer|killed\s+\(out of memory\)|"
+            r"Cannot allocate memory|memory limit exceeded|insufficient memory)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "module_load_failure",
+        "fix_module_environment",
+        re.compile(
+            r"(?:module:\s+command not found|Lmod has detected the following error|"
+            r"Unable to locate a modulefile|module load failed)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "license_failure",
+        "license_server_or_compiler_check",
+        re.compile(
+            r"(?:license\s+server|no\s+(?:available\s+)?license|FlexLM|"
+            r"unable to checkout license|license\s+expired)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "mpi_rank_signal",
+        "investigate_failing_rank",
+        re.compile(
+            r"(?:rank\s+\d+\s*[:=]\s*(?:segmentation fault|killed|signal)|"
+            r"MPI[_ ]Abort|Caught signal\s+\d+|Signal:\s+(?:Segmentation|Bus|Floating))",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "file_quota_exceeded",
+        "free_disk_or_change_workdir",
+        re.compile(
+            r"(?:Disk\s+quota\s+exceeded|No space left on device|quota\s+exceeded)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "node_failure",
+        "resubmit_after_node_drained",
+        re.compile(
+            r"(?:node\s+failure|lost\s+contact\s+with\s+node|node\s+has\s+failed|"
+            r"NODE_FAIL\b|host\s+unreachable)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "signal_term",
+        "scheduler_terminated_job",
+        re.compile(
+            r"(?:Caught signal 15\b|received SIGTERM|terminated by signal\s*15)",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def _detect_cluster_failure_signatures(compact: dict[str, Any]) -> list[dict[str, Any]]:
+    """Scan the compact log summary for cluster-boundary failure signatures.
+
+    Returns a list of `{signature_id, recovery_family, sample_line, line_number}`
+    dicts (one per matched signature). The agent uses these to recover from
+    cluster-side failures without ad-hoc shell. MCP only reports — it does not
+    apply recovery.
+    """
+    haystack: list[tuple[str | None, str]] = []
+    for line in compact.get("head_lines", []):
+        haystack.append((None, str(line)))
+    for line in compact.get("tail_lines", []):
+        haystack.append((None, str(line)))
+    for entry in compact.get("diagnostics", []) or []:
+        if isinstance(entry, dict):
+            ln = entry.get("line_number")
+            text = str(entry.get("line", ""))
+            haystack.append((ln, text))
+
+    seen: dict[str, dict[str, Any]] = {}
+    for signature_id, recovery_family, regex in _CLUSTER_FAILURE_SIGNATURES:
+        for line_number, line in haystack:
+            if regex.search(line):
+                if signature_id in seen:
+                    seen[signature_id]["match_count"] += 1
+                    continue
+                seen[signature_id] = {
+                    "signature_id": signature_id,
+                    "recovery_family": recovery_family,
+                    "sample_line": line.strip()[:240],
+                    "line_number": line_number,
+                    "match_count": 1,
+                }
+    return list(seen.values())
+
+
 def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]]]:
     compact, err = _stream_log_summary(path_str)
     if err or compact is None:
@@ -721,6 +857,18 @@ def _inspect_log(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
             "location": "log",
             "description": f"{len(compact['diagnostics'])} diagnostic signature(s) retained after deduplication.",
             "diagnostics": compact["diagnostics"],
+        })
+
+    cluster_signatures = _detect_cluster_failure_signatures(compact)
+    if cluster_signatures:
+        findings.append({
+            "kind": "cluster_failure_signatures",
+            "location": "log",
+            "description": (
+                f"{len(cluster_signatures)} cluster-boundary failure signature(s) detected; "
+                "the skill should pick the recovery_family per signature without ad hoc shell."
+            ),
+            "signatures": cluster_signatures,
         })
 
     progress = compact["progress"]
@@ -1120,10 +1268,13 @@ def _inspect_param(
     required_components = _infer_required_components_from_sessions(parsed.sessions)
 
     n_sessions = len(parsed.sessions)
-    param_semantics = _extract_param_semantics(text, parsed)
-    saveplot_blocks = param_semantics.get("saveplot_blocks", [])
 
-    # Build findings
+    # Slim PARAM inspector (see docs/run_replication_plan.md §5.3.1):
+    # emit structural primitives only. The agent reads PARAM.in directly for intent
+    # reasoning. Semantic-summary fields (session timeline, control settings, saveplot
+    # blocks) have been removed from this inspector. Run-directory inspection still
+    # extracts saveplot_blocks internally for component_output_artifacts mapping.
+
     findings: list[dict[str, Any]] = []
 
     q_lower = question.lower()
@@ -1131,9 +1282,6 @@ def _inspect_param(
     focus_compmap = any(tok in q_lower for tok in ("component map", "componentmap", "#componentmap"))
     focus_validate = any(tok in q_lower for tok in ("validate", "validation", "testparam"))
     focus_external = any(tok in q_lower for tok in ("external", "external ref", "file ref"))
-    focus_timeline = any(tok in q_lower for tok in ("session", "timeline", "run phases", "phase"))
-    focus_control = any(tok in q_lower for tok in ("control", "timeaccurate", "stop", "couple", "cadence"))
-    focus_saveplot = any(tok in q_lower for tok in ("saveplot", "#saveplot", "stringplot", "outs", "plot"))
 
     # Always add structure finding
     findings.append({
@@ -1150,47 +1298,6 @@ def _inspect_param(
         "parser_errors": parsed.errors,
         "parser_warnings": parsed.warnings,
     })
-
-    # Session commands (limited)
-    if n_sessions > 0:
-        commands_by_session = [session.commands for session in parsed.sessions[:5]]
-        findings.append({
-            "kind": "session_commands",
-            "location": path_str,
-            "description": f"Commands per session (first {min(n_sessions, 5)}).",
-            "commands_by_session": commands_by_session,
-        })
-    if param_semantics["session_timeline"] or focus_timeline:
-        findings.append({
-            "kind": "param_session_timeline",
-            "location": path_str,
-            "description": (
-                f"Session timeline extracted for {len(param_semantics['session_timeline'])} session(s). "
-                f"{len(param_semantics['key_command_timeline'])} key command event(s)."
-            ),
-            "sessions": param_semantics["session_timeline"][:12],
-            "key_command_timeline": param_semantics["key_command_timeline"][:60],
-        })
-
-    if param_semantics["control_summary"] or focus_control:
-        findings.append({
-            "kind": "param_control_settings",
-            "location": path_str,
-            "description": (
-                f"{len(param_semantics['control_command_blocks'])} control-command block(s) "
-                f"with {len(param_semantics['control_summary'])} key setting(s)."
-            ),
-            "control_settings": param_semantics["control_summary"][:40],
-            "control_command_blocks": param_semantics["control_command_blocks"][:20],
-        })
-
-    if saveplot_blocks or focus_saveplot:
-        findings.append({
-            "kind": "param_saveplot_blocks",
-            "location": path_str,
-            "description": f"{len(saveplot_blocks)} #SAVEPLOT block(s) parsed.",
-            "saveplot_blocks": saveplot_blocks[:20],
-        })
 
     # Include files
     if include_refs or focus_includes:
@@ -1247,17 +1354,10 @@ def _inspect_param(
             "parser_errors": parsed.errors[:10],
         })
 
-    # Evidence from question
+    # Evidence from question (skip when a structural focus token is present)
     evidence: list[dict[str, Any]] = []
     if question and not any(
-        (
-            focus_includes,
-            focus_compmap,
-            focus_validate,
-            focus_timeline,
-            focus_control,
-            focus_saveplot,
-        )
+        (focus_includes, focus_compmap, focus_validate, focus_external)
     ):
         raw = ks.search_source(
             swmf_root,
@@ -1271,8 +1371,8 @@ def _inspect_param(
     summary = (
         f"PARAM.in at '{path_str}': {n_sessions} session(s), "
         f"{len(required_components)} component(s) ({', '.join(required_components) or 'none'}), "
-        f"{len(missing_includes)} missing include(s), "
-        f"{len(saveplot_blocks)} #SAVEPLOT block(s)."
+        f"{len(missing_includes)} missing include(s); "
+        "read the file directly for sessions, control cadence, and #SAVEPLOT intent."
     )
     return summary, findings, evidence
 
@@ -1934,6 +2034,107 @@ def _component_output_artifacts(
     }
 
 
+_ENSEMBLE_RUN_RE = re.compile(r"^run(\d{2,3})$")
+
+
+def _detect_ensemble_layout(p: Path) -> dict[str, Any] | None:
+    """Detect a multi-realization ensemble layout (run01/, run02/, ..., run12/).
+
+    Returns a `run_dir_ensemble` finding when at least 2 zero-padded `runNN/`
+    sibling subdirectories are present at *p*; otherwise None. The layout is
+    produced by SWMFSOLAR's Makefile target `rundir_realizations` (one
+    realization per ADAPT layer).
+    """
+    try:
+        children = sorted(p.iterdir())
+    except OSError:
+        return None
+
+    realization_dirs: list[tuple[int, Path]] = []
+    for child in children:
+        if not child.is_dir():
+            continue
+        match = _ENSEMBLE_RUN_RE.match(child.name)
+        if not match:
+            continue
+        realization_dirs.append((int(match.group(1)), child))
+
+    if len(realization_dirs) < 2:
+        return None
+
+    realization_dirs.sort()
+    realizations: list[dict[str, Any]] = []
+    success_count = 0
+    crashed_count = 0
+    no_log_count = 0
+    in_progress_count = 0
+    missing_executable_count = 0
+
+    for index, run_dir in realization_dirs:
+        success = (run_dir / "SWMF.SUCCESS").exists()
+        kill = (run_dir / "SWMF.KILL").exists() or (run_dir / "SWMF.KILLED").exists()
+        log_paths = _discover_run_log_candidates(run_dir)
+        has_log = bool(log_paths)
+        has_param = (run_dir / "PARAM.in").exists()
+        has_executable = (run_dir / "SWMF.exe").exists() or any(
+            (run_dir / candidate).exists()
+            for candidate in ("AWSoM.exe", "AWSoMR.exe", "AWSoMR_SOFIE.exe")
+        )
+
+        if success and not kill:
+            status = "completed"
+            success_count += 1
+        elif kill:
+            status = "killed"
+            crashed_count += 1
+        elif has_log and not success:
+            status = "in_progress_or_crashed"
+            in_progress_count += 1
+        elif has_param and has_executable and not has_log:
+            status = "prepared"
+            no_log_count += 1
+        elif has_param and not has_executable:
+            status = "missing_executable"
+            missing_executable_count += 1
+        else:
+            status = "unknown"
+
+        realizations.append({
+            "index": index,
+            "name": run_dir.name,
+            "path": str(run_dir),
+            "status": status,
+            "has_swmf_success": success,
+            "has_kill_marker": kill,
+            "has_param_in": has_param,
+            "has_executable": has_executable,
+            "log_count": len(log_paths),
+        })
+
+    aggregate = {
+        "completed": success_count,
+        "killed": crashed_count,
+        "in_progress_or_crashed": in_progress_count,
+        "prepared": no_log_count,
+        "missing_executable": missing_executable_count,
+        "total": len(realization_dirs),
+    }
+
+    return {
+        "kind": "run_dir_ensemble",
+        "location": str(p),
+        "description": (
+            f"Ensemble layout: {len(realization_dirs)} realization(s); "
+            f"completed={success_count}, killed={crashed_count}, "
+            f"in_progress_or_crashed={in_progress_count}, prepared={no_log_count}."
+        ),
+        "realization_count": len(realization_dirs),
+        "realization_indices": [idx for idx, _ in realization_dirs],
+        "realizations": realizations,
+        "aggregate": aggregate,
+    }
+
+
 def _inspect_run_dir(
     path_str: str,
     question: str,
@@ -2149,6 +2350,10 @@ def _inspect_run_dir(
         }
         | set(declared_components)
     )
+    ensemble_finding = _detect_ensemble_layout(p)
+    if ensemble_finding is not None:
+        findings.append(ensemble_finding)
+
     findings.append(_component_artifact_inventory(p, declared_components))
     restart_inventory = _restart_inventory(p)
     if restart_inventory["framework"] or restart_inventory["components"] or restart_inventory["restart_tree_candidates"]:
@@ -2596,6 +2801,384 @@ def _inspect_result(path_str: str, question: str) -> tuple[str, list[dict[str, A
 
 
 # ---------------------------------------------------------------------------
+# param rule evaluation (consumed when check_rules=True)
+# ---------------------------------------------------------------------------
+
+def _attach_param_rule_findings(path_str: str, findings: list[dict[str, Any]]) -> None:
+    text, err = _read_file_safe(path_str)
+    if err or text is None:
+        findings.append({
+            "kind": "rule_violations",
+            "location": path_str,
+            "description": "Could not read PARAM.in for rule evaluation.",
+            "rule_violations": [],
+            "rule_check_summary": {"block": 0, "warn": 0, "info": 0},
+            "rules_loaded_from": str(DEFAULT_RULES_PATH),
+            "rules_load_error": err or "PARAM.in not readable.",
+        })
+        return
+
+    blocks = _parse_param_command_blocks(text)
+    rules, meta = load_rules()
+
+    if meta.get("error"):
+        findings.append({
+            "kind": "rule_violations",
+            "location": path_str,
+            "description": f"Rule evaluation skipped: {meta['error']}",
+            "rule_violations": [],
+            "rule_check_summary": {"block": 0, "warn": 0, "info": 0},
+            "rules_loaded_from": meta.get("path"),
+            "rules_load_error": meta.get("error"),
+        })
+        return
+
+    violations = evaluate_rules(rules, blocks)
+    summary = {"block": 0, "warn": 0, "info": 0}
+    for v in violations:
+        sev = v.get("severity", "warn")
+        if sev in summary:
+            summary[sev] += 1
+
+    findings.append({
+        "kind": "rule_violations",
+        "location": path_str,
+        "description": (
+            f"{len(violations)} rule violation(s) "
+            f"(block={summary['block']}, warn={summary['warn']}, info={summary['info']}) "
+            f"from {len(rules)} rule(s)."
+        ),
+        "rule_violations": violations,
+        "rule_check_summary": summary,
+        "rules_loaded_from": meta.get("path"),
+        "rules_load_error": None,
+    })
+
+
+# ---------------------------------------------------------------------------
+# jobscript inspector
+# ---------------------------------------------------------------------------
+
+def _inspect_jobscript(path_str: str, question: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    p = Path(path_str)
+    if not p.is_file():
+        return (
+            f"Jobscript path '{path_str}' is not a file.",
+            [{
+                "kind": "jobscript_not_found",
+                "location": path_str,
+                "description": "No file at the given path.",
+            }],
+            [],
+        )
+
+    parsed, err = parse_jobscript_file(p)
+    if parsed is None or err is not None:
+        return err or "Could not read jobscript.", [], []
+
+    findings: list[dict[str, Any]] = []
+    findings.append({
+        "kind": "jobscript_layout",
+        "location": path_str,
+        "description": (
+            f"Scheduler={parsed['scheduler']}; "
+            f"nodes={parsed['nodes']}; "
+            f"tasks_per_node={parsed['tasks_per_node']}; "
+            f"total_ranks={parsed['total_ranks']}; "
+            f"walltime={parsed['walltime']}."
+        ),
+        "scheduler": parsed["scheduler"],
+        "nodes": parsed["nodes"],
+        "tasks_per_node": parsed["tasks_per_node"],
+        "total_ranks": parsed["total_ranks"],
+        "walltime": parsed["walltime"],
+        "directives": parsed["directives"][:40],
+    })
+
+    findings.append({
+        "kind": "executable_invocations",
+        "location": path_str,
+        "description": (
+            f"{len(parsed['executable_invocations'])} launcher line(s); "
+            f"SWMF.exe={parsed['swmf_invoked']}, "
+            f"FDIPS.exe={parsed['fdips_invoked']}, "
+            f"HARMONICS.exe={parsed['harmonics_invoked']}, "
+            f"PostProc.pl={parsed['postproc_present']}."
+        ),
+        "executable_invocations": parsed["executable_invocations"][:20],
+        "swmf_invoked": parsed["swmf_invoked"],
+        "fdips_invoked": parsed["fdips_invoked"],
+        "harmonics_invoked": parsed["harmonics_invoked"],
+        "postproc_present": parsed["postproc_present"],
+    })
+
+    if parsed["substitution_tokens"]:
+        findings.append({
+            "kind": "substitution_tokens",
+            "location": path_str,
+            "description": (
+                f"{len(parsed['substitution_tokens'])} placeholder/token(s) likely intended for substitution."
+            ),
+            "tokens": parsed["substitution_tokens"][:30],
+        })
+
+    summary = (
+        f"Jobscript '{p.name}': scheduler={parsed['scheduler']}, "
+        f"nodes={parsed['nodes']}, tasks_per_node={parsed['tasks_per_node']}, "
+        f"total_ranks={parsed['total_ranks']}, walltime={parsed['walltime']}, "
+        f"SWMF.exe={parsed['swmf_invoked']}."
+    )
+    return summary, findings, []
+
+
+# ---------------------------------------------------------------------------
+# magnetogram inspector
+# ---------------------------------------------------------------------------
+
+def _inspect_magnetogram(path_str: str, question: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    p = Path(path_str)
+    if not p.is_file():
+        return (
+            f"Magnetogram path '{path_str}' is not a file.",
+            [{
+                "kind": "magnetogram_not_found",
+                "location": path_str,
+                "description": "No file at the given path.",
+            }],
+            [],
+        )
+
+    parsed = parse_magnetogram_file(p)
+    findings: list[dict[str, Any]] = []
+    findings.append({
+        "kind": "magnetogram_classification",
+        "location": path_str,
+        "description": (
+            f"format={parsed['format']}, map_type={parsed['map_type']}, "
+            f"CR={parsed['carrington_rotation']}, time={parsed['observation_time']}."
+        ),
+        "format": parsed["format"],
+        "map_type": parsed["map_type"],
+        "carrington_rotation": parsed["carrington_rotation"],
+        "observation_time": parsed["observation_time"],
+        "realization_count": parsed["realization_count"],
+        "grid": parsed["grid"],
+        "file_size_bytes": parsed["file_size_bytes"],
+        "filename": parsed["filename"],
+        "filename_inferred_long0": parsed["filename_inferred_long0"],
+        "evidence_source": parsed["evidence_source"],
+    })
+    if parsed["fits_header_keys"]:
+        findings.append({
+            "kind": "fits_header_keys",
+            "location": path_str,
+            "description": f"{len(parsed['fits_header_keys'])} primary-HDU keyword(s) read.",
+            "header_keys": parsed["fits_header_keys"],
+        })
+    if parsed["warnings"]:
+        findings.append({
+            "kind": "magnetogram_warnings",
+            "location": path_str,
+            "description": "Parser warnings.",
+            "warnings": parsed["warnings"],
+        })
+
+    summary = (
+        f"Magnetogram '{p.name}': format={parsed['format']}, map_type={parsed['map_type']}, "
+        f"CR={parsed['carrington_rotation']}, observation_time={parsed['observation_time']}."
+    )
+    return summary, findings, []
+
+
+# ---------------------------------------------------------------------------
+# ccmc_spec inspector
+# ---------------------------------------------------------------------------
+
+def _inspect_ccmc_spec(path_str: str, question: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    p = Path(path_str)
+    if not p.is_file():
+        return (
+            f"CCMC spec path '{path_str}' is not a file.",
+            [{
+                "kind": "ccmc_spec_not_found",
+                "location": path_str,
+                "description": "No file at the given path.",
+            }],
+            [],
+        )
+
+    parsed = parse_ccmc_spec_file(p)
+    findings: list[dict[str, Any]] = []
+
+    findings.append({
+        "kind": "ccmc_spec_summary",
+        "location": path_str,
+        "description": (
+            f"run_id={parsed['run_id']}; model={parsed['model']}; "
+            f"event_time={parsed['event_time_utc']}; fr_type={parsed['fr_type']}."
+        ),
+        "run_id": parsed["run_id"],
+        "model": parsed["model"],
+        "event_time_utc": parsed["event_time_utc"],
+        "fr_type": parsed["fr_type"],
+        "fr_params": parsed["fr_params"],
+        "cone_params": parsed["cone_params"],
+        "cme_params": parsed["cme_params"],
+        "mflampa_params": parsed["mflampa_params"],
+        "metadata": parsed["metadata"],
+    })
+
+    if parsed["input_files_listed"] or parsed["output_files_listed"]:
+        findings.append({
+            "kind": "ccmc_spec_files",
+            "location": path_str,
+            "description": (
+                f"{len(parsed['input_files_listed'])} input file(s); "
+                f"{len(parsed['output_files_listed'])} output file(s)."
+            ),
+            "input_files_listed": parsed["input_files_listed"],
+            "output_files_listed": parsed["output_files_listed"],
+        })
+
+    if parsed["quicklook_targets"]:
+        findings.append({
+            "kind": "ccmc_spec_quicklook",
+            "location": path_str,
+            "description": f"{len(parsed['quicklook_targets'])} quick-look target(s) listed.",
+            "quicklook_targets": parsed["quicklook_targets"],
+        })
+
+    if parsed["unparsed_sections"]:
+        findings.append({
+            "kind": "ccmc_spec_unparsed",
+            "location": path_str,
+            "description": f"{len(parsed['unparsed_sections'])} section(s) not parsed into typed fields.",
+            "unparsed_sections": parsed["unparsed_sections"],
+        })
+
+    summary = (
+        f"CCMC spec '{p.name}': run_id={parsed['run_id']}, model={parsed['model']}, "
+        f"event_time={parsed['event_time_utc']}, fr_type={parsed['fr_type']}."
+    )
+    return summary, findings, []
+
+
+# ---------------------------------------------------------------------------
+# paper_spec inspector
+# ---------------------------------------------------------------------------
+
+def _inspect_paper_spec(path_str: str, question: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    p = Path(path_str)
+    if not p.is_file():
+        return (
+            f"paper_spec path '{path_str}' is not a file.",
+            [{
+                "kind": "paper_spec_not_found",
+                "location": path_str,
+                "description": "No file at the given path.",
+            }],
+            [],
+        )
+
+    parsed = parse_paper_spec_file(p)
+    findings: list[dict[str, Any]] = []
+
+    parse_errors = parsed.get("parse_errors") or []
+    read_error = parsed.get("read_error")
+    if read_error:
+        parse_errors = list(parse_errors) + [read_error]
+
+    if parse_errors:
+        findings.append({
+            "kind": "paper_spec_parse_errors",
+            "location": path_str,
+            "description": f"{len(parse_errors)} parse error(s) while loading the spec file.",
+            "errors": parse_errors,
+        })
+
+    findings.append({
+        "kind": "paper_spec_summary",
+        "location": path_str,
+        "description": (
+            f"run_id={parsed['run_id']}; model={parsed['model']}; "
+            f"event_time={parsed['event_time_utc']}; fr_type={parsed['fr_type']}; "
+            f"source_paper_path={parsed['source_paper_path']}."
+        ),
+        "run_id": parsed["run_id"],
+        "model": parsed["model"],
+        "model_version": parsed["model_version"],
+        "event_time_utc": parsed["event_time_utc"],
+        "fr_type": parsed["fr_type"],
+        "fr_params": parsed["fr_params"],
+        "cone_params": parsed["cone_params"],
+        "cme_params": parsed["cme_params"],
+        "mflampa_params": parsed["mflampa_params"],
+        "metadata": parsed["metadata"],
+        "source_paper_path": parsed["source_paper_path"],
+    })
+
+    findings.append({
+        "kind": "paper_spec_provenance",
+        "location": path_str,
+        "description": (
+            "Agent-extracted spec; every field requires confirmation before launch."
+        ),
+        "source_paper_path": parsed["source_paper_path"],
+        "confidence_per_field": parsed["confidence_per_field"],
+    })
+
+    if parsed["input_files_listed"] or parsed["output_files_listed"]:
+        findings.append({
+            "kind": "paper_spec_files",
+            "location": path_str,
+            "description": (
+                f"{len(parsed['input_files_listed'])} input file(s); "
+                f"{len(parsed['output_files_listed'])} output file(s)."
+            ),
+            "input_files_listed": parsed["input_files_listed"],
+            "output_files_listed": parsed["output_files_listed"],
+        })
+
+    if parsed["quicklook_targets"]:
+        findings.append({
+            "kind": "paper_spec_quicklook",
+            "location": path_str,
+            "description": f"{len(parsed['quicklook_targets'])} quick-look target(s) listed.",
+            "quicklook_targets": parsed["quicklook_targets"],
+        })
+
+    missing = parsed.get("missing_fields") or []
+    if missing:
+        findings.append({
+            "kind": "paper_spec_missing_fields",
+            "location": path_str,
+            "description": (
+                f"{len(missing)} canonical field(s) absent from the spec; the agent must "
+                "fill these from another source or surface them as gaps to the user."
+            ),
+            "missing_fields": missing,
+        })
+
+    unparsed = parsed.get("unparsed_keys") or []
+    if unparsed:
+        findings.append({
+            "kind": "paper_spec_unparsed_keys",
+            "location": path_str,
+            "description": (
+                f"{len(unparsed)} top-level key(s) outside the canonical paper_spec shape."
+            ),
+            "unparsed_keys": unparsed,
+        })
+
+    summary = (
+        f"paper_spec '{p.name}': run_id={parsed['run_id']}, model={parsed['model']}, "
+        f"event_time={parsed['event_time_utc']}, fr_type={parsed['fr_type']}, "
+        f"source_paper_path={parsed['source_paper_path']}."
+    )
+    return summary, findings, []
+
+
+# ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
@@ -2605,6 +3188,7 @@ def inspect_artifact(
     question: str | None = None,
     swmf_root: str | None = None,
     run_dir: str | None = None,
+    check_rules: bool = False,
 ) -> dict[str, Any]:
     """Inspect one specific local SWMF artifact deeply.
 
@@ -2614,7 +3198,10 @@ def inspect_artifact(
 
     Phase 4 specialized inspectors:
     - log: error/stacktrace + component detection + simulation time + MPI rank info
-    - param: structure + session timeline + control settings + #SAVEPLOT extraction
+    - param: structural primitives only — session count, component map, includes,
+      external refs, parser errors. Semantic intent (sessions, control cadence,
+      #SAVEPLOT meaning) is for the agent to read directly from the file. Pass
+      check_rules=True to evaluate the user-owned physical_constraints.yaml.
     - xml: command listing from PARAM.XML parser + command search
     - run_dir: artifact presence + PARAM.in summary + log discovery + job scripts + output subdirs
     - build_output: SWMF root markers (dir) or compile/linker errors (file)
@@ -2641,6 +3228,8 @@ def inspect_artifact(
         summary, findings = _inspect_log(path, resolved_question)
     elif resolved_type == "param":
         summary, findings, evidence = _inspect_param(path, resolved_question, swmf_root_str)
+        if check_rules:
+            _attach_param_rule_findings(path, findings)
     elif resolved_type == "xml":
         summary, findings = _inspect_xml(path, resolved_question)
     elif resolved_type == "run_dir":
@@ -2649,6 +3238,14 @@ def inspect_artifact(
         summary, findings = _inspect_build_output(path, resolved_question)
     elif resolved_type == "result":
         summary, findings = _inspect_result(path, resolved_question)
+    elif resolved_type == "jobscript":
+        summary, findings, evidence = _inspect_jobscript(path, resolved_question)
+    elif resolved_type == "magnetogram":
+        summary, findings, evidence = _inspect_magnetogram(path, resolved_question)
+    elif resolved_type == "ccmc_spec":
+        summary, findings, evidence = _inspect_ccmc_spec(path, resolved_question)
+    elif resolved_type == "paper_spec":
+        summary, findings, evidence = _inspect_paper_spec(path, resolved_question)
 
     # Known unknowns per type
     known_unknowns_by_type: dict[str, list[str]] = {
@@ -2661,6 +3258,7 @@ def inspect_artifact(
             "Component detection based on log line prefixes; may miss components with non-standard output.",
         ],
         "param": [
+            "Structural primitives only — no semantic summary. Read PARAM.in directly for session intent, control cadence, and #SAVEPLOT meaning.",
             "Lightweight parser only — not authoritative. Full validation still requires Scripts/TestParam.pl from the SWMF root.",
             "External file references resolved relative to PARAM.in directory; may miss environment variables.",
         ],
@@ -2677,6 +3275,24 @@ def inspect_artifact(
         "result": [
             "Binary files cannot be inspected without specialized tools (IDL, netCDF, etc.).",
             "SWMF output format detection is heuristic; may misclassify custom outputs.",
+        ],
+        "jobscript": [
+            "Static parser only; environment variables expanded at submit time are reported verbatim.",
+            "Heterogeneous schedulers (LSF, SGE) are not yet recognized.",
+        ],
+        "magnetogram": [
+            "Header read from the primary HDU only; multi-HDU magnetograms (some ADAPT bundles) report only the first realization layer.",
+            "Map-type detection prefers FITS ORIGIN/OBS-SITE over filename patterns; non-standard filenames may default to 'unknown'.",
+            "No data-array statistics surfaced; the MCP tool reports headers, not pixels.",
+        ],
+        "ccmc_spec": [
+            "Markdown-table parser only; sections without a Field/Value column are reported under 'unparsed_sections'.",
+            "Unit conventions for spec fields (full vs half cone-opening angle, Poynting ratio scaling) are recorded as fields and not interpreted.",
+        ],
+        "paper_spec": [
+            "MCP only loads the JSON/YAML the agent wrote; it does NOT parse paper PDFs. Confidence-per-field is recorded verbatim from the agent's extraction.",
+            "Missing fields surfaced as gaps; the skill must close them via spec, prior run, template, or user confirmation before launch.",
+            "Field shape mirrors ccmc_spec for downstream merging; semantic interpretation is the skill's job, not MCP's.",
         ],
     }
 
@@ -2705,13 +3321,17 @@ def register(app: Any) -> None:
         description=(
             "Inspect one specific local SWMF artifact deeply. "
             "artifact_type must be one of: 'log', 'param', 'xml', 'run_dir', "
-            "'build_output', 'result'. 'runlog' is accepted as a log alias. "
+            "'build_output', 'result', 'jobscript', 'magnetogram', 'ccmc_spec', 'paper_spec'. "
+            "'runlog' is accepted as a log alias. "
+            "Pass check_rules=True with artifact_type='param' to also evaluate the user-owned "
+            "physical_constraints.yaml in support/swmf-params/rules/. "
             "Use for debugging log files, inspecting PARAM.in structure, validating "
             "run directories, or examining build output. Start debugging tasks here "
             "before calling get_evidence. "
             "Specialized inspectors: log detects first error, stacktrace, components, "
-            "simulation time; param extracts sessions, component map, includes, external "
-            "refs, command timeline, control settings, and #SAVEPLOT blocks; xml lists "
+            "simulation time; param returns structural primitives only (session count, "
+            "component map, includes, external refs, parser errors) — read PARAM.in "
+            "directly for sessions/control cadence/#SAVEPLOT intent; xml lists "
             "commands from PARAM.XML; run_dir checks artifact presence (SWMF.SUCCESS/DONE), "
             "summarizes PARAM.in intent, discovers logs with first-error, summarizes "
             "component output artifacts compactly, and finds job scripts; build_output checks SWMF root markers or compile/linker errors; "

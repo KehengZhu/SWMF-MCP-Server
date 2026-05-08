@@ -404,6 +404,55 @@ Each new artifact type **must not** return:
 
 Output is fact-only. The skill draws conclusions.
 
+### 5.3.1 Slim PARAM inspector (post-Phase-2 refactor)
+
+`inspect_artifact(artifact_type="param")` is reduced to **structural primitives only**.
+Its job is to emit machine-readable structure that the rule evaluator, the diff routine,
+and the include/external-reference resolver consume. It is no longer a summarizer.
+
+Removed findings (the agent reads PARAM.in directly for these):
+
+- `session_commands` — per-session command lists.
+- `param_session_timeline` — sessions with key-command events.
+- `param_control_settings` — control-command summary.
+- `param_saveplot_blocks` — `#SAVEPLOT` semantic extraction.
+
+Retained findings (genuinely structural, agent can't reliably produce from raw text):
+
+- `param_structure` — session count, command-map count, include count, external-ref
+  count, parser errors/warnings.
+- `include_files` — resolved `#INCLUDE` references with on-disk presence.
+- `component_map` — `#COMPONENTMAP` rows expanded to typed `(component, proc0, procend,
+  stride, nthread)` tuples; required components.
+- `external_references` — referenced files with on-disk presence and ambiguities.
+- `validation_note` — parser errors at the structural level.
+- `rule_violations` — when `check_rules=True`; YAML-driven, see §5.4.
+
+Run-directory inspection (`artifact_type="run_dir"`) keeps its internal use of
+`_extract_param_semantics` because the `component_output_artifacts` finding maps
+`#SAVEPLOT` intent to discovered output-file groups. That is structural extraction
+across the run tree, not a summary handed back to the agent for intent reasoning.
+
+**Skill protocol implication**: when a skill needs PARAM intent (sessions, control
+cadence, save-plot intent, command flow), it reads the PARAM file directly. It calls
+`inspect_artifact(artifact_type="param")` only when one of the retained primitives is
+needed: rule evaluation (`check_rules=True`), include/external-ref resolution, or as
+input to `compare_artifacts(comparison_type="param"|"run_dir")`. The existing
+`swmf-analyze` policy ("read the run-local PARAM.in completely and reason from the
+actual file contents") is now the cross-skill default.
+
+Rationale: PARAM.in files are short (typically 200–700 lines, well within the agent
+context budget), structured, and human-readable by design. An LLM reads PARAM intent
+better than a fixed-schema summarizer. MCP duplicating that summary cost tokens, locked
+in one interpretation, and competed with the agent's own reading. The structural
+primitives that remain are operations the agent genuinely cannot do reliably from raw
+text (typed value extraction for rule evaluation, set-level diff between two PARAMs,
+filesystem-grounded include resolution).
+
+This refactor is post-Phase-2 cleanup, not part of any phase's deliverables. It does
+not change the public surface of `inspect_artifact` (still one tool, same artifact
+types) — only the shape of the `findings` array for `artifact_type="param"`.
+
 ### 5.4 Extension interface: `swmf-params` rules directory
 
 The `swmf-params` support skill owns a rules directory the user grows over time. This is the **single backstop** for everything the agent does not yet know about valid PARAM construction — and, equally important, everything the spec does not supply but a working PARAM still needs. Both MCP and the skill consume from it:
@@ -1079,4 +1128,5 @@ Each marked decision the user should know was a tradeoff.
 - A mandatory pre-launch gate runs MCP rule checks, `Scripts/TestParam.pl`, a PARAM diff, and explicit user approval. Hard-blocks on `severity=block` rule violations or schema errors.
 - The Phase 2 gold target is `examples/CCMC_run_weihao/`: agent reproduces both PARAM files against the bundled standard answers, with every delta classified.
 - Operational logic (download, build, submit, postproc) stays in SWMFSOLAR scripts the agent shells; MCP only inspects results.
+- **Slim PARAM inspector (§5.3.1)**: `inspect_artifact(artifact_type="param")` returns structural primitives only (sessions, includes, component map, external refs, parser errors, rule violations). The agent reads PARAM.in directly for intent reasoning. `inspect_artifact(param)` is invoked only for rule evaluation, compare, or include/external-ref resolution.
 - Validation against papers/observations is skill-level, not MCP-level. Reference comparison is presented to the user; MCP does not adjudicate.

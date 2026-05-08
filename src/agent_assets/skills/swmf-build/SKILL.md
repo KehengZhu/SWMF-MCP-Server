@@ -30,6 +30,9 @@ description: "Use when the task is about compiling, setting up build targets, bu
 
 * `swmf-params` — if a PARAM.in must be valid before building
 * `swmf-exact-lookup` — for specific symbol or flag confirmation
+* `swmf-swmfsolar` — for AWSoM/SOFIE replication, the canonical `Config.pl` and `make`
+  patterns live in SWMFSOLAR's Makefile rather than being rederived. Cite that helper
+  when the build target is part of a CME or solar-wind replication workflow.
 
 ## Outputs
 

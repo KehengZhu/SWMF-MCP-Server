@@ -398,7 +398,19 @@ class TestInspectArtifact:
         assert "path" in result["provenance"]
 
     def test_valid_artifact_types(self) -> None:
-        for at in ("log", "runlog", "param", "xml", "run_dir", "build_output", "result"):
+        for at in (
+            "log",
+            "runlog",
+            "param",
+            "xml",
+            "run_dir",
+            "build_output",
+            "result",
+            "jobscript",
+            "magnetogram",
+            "ccmc_spec",
+            "paper_spec",
+        ):
             result = self._call(artifact_type=at, path="some/path")
             assert result["artifact_type"] == at
 

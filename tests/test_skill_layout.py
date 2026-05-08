@@ -22,15 +22,21 @@ _ENTRY_SKILLS = [
     "swmf-configure",
     "swmf-debug",
     "swmf-explain",
+    "swmf-replicate",
     "swmf-run",
 ]
 
 _SUPPORT_SKILLS = [
     "swmf-architecture",
+    "swmf-cme-setup",
     "swmf-exact-lookup",
     "swmf-implementation",
+    "swmf-jobscript",
+    "swmf-magnetogram",
     "swmf-params",
     "swmf-postproc",
+    "swmf-swmfsolar",
+    "swmf-validation",
 ]
 
 

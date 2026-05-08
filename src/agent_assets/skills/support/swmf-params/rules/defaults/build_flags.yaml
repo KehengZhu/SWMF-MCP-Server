@@ -1,0 +1,33 @@
+# Config.pl flag defaults per archetype. Apply at step 5 of the authoring ladder when
+# the spec or template manifest does not override them. The agent emits these as the
+# `build_plan` field of `swmf-replicate`'s output, with `provenance=default:<id>`.
+
+- id: sofie_mflampa_cme_layout
+  case_archetype: sofie_mflampa_cme
+  config_pl: "Config.pl -v=Empty,SC/BATSRUS,IH/BATSRUS,SP/MFLAMPA"
+  evidence: "examples/CCMC_run_weihao restart header; PARAM.in.sofie.MFLAMPA header."
+
+- id: sofie_mflampa_cme_sc
+  case_archetype: sofie_mflampa_cme
+  config_pl: "Config.pl -o=SC:u=AwsomR,e=AwsomSA,ng=2,g=8,8,4"
+  evidence: "examples/CCMC_run_weihao start: AWSoM-R SaMhd SC build."
+
+- id: sofie_mflampa_cme_ih
+  case_archetype: sofie_mflampa_cme
+  config_pl: "Config.pl -o=IH:u=AwsomR,e=AwsomSA,ng=2,g=4,4,4"
+  evidence: "examples/CCMC_run_weihao start: IH must match SC variant."
+
+- id: sofie_mflampa_cme_sp
+  case_archetype: sofie_mflampa_cme
+  config_pl: "Config.pl -o=SP:g=20000"
+  evidence: "examples/CCMC_run_weihao start: SP/MFLAMPA grid count."
+
+- id: awsom_cme_eruption_layout
+  case_archetype: awsom_cme_eruption
+  config_pl: "Config.pl -v=Empty,SC/BATSRUS,IH/BATSRUS"
+  evidence: "PARAM.in.awsomr.CME header; SWMFSOLAR/Run_Max_RP_CME3/run01."
+
+- id: awsom_cme_eruption_sc
+  case_archetype: awsom_cme_eruption
+  config_pl: "Config.pl -o=SC:u=Awsom,e=Awsom,g=6,8,8,ng=3"
+  evidence: "PARAM.in.awsomr.CME header for the AWSoM (not -R) variant; AWSoM-R replaces u=Awsom→AwsomR."

@@ -167,7 +167,12 @@ def _diff_dirs(
     right_path: Path,
     max_files: int = 300,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Return (DiffItem list, changed_flag) for directory comparison."""
+    """Return (DiffItem list, changed_flag) for directory comparison.
+
+    For run_dir comparison, also surface a structured `param_diff` entry by feeding
+    each side's PARAM.in through the existing param comparator. This is the
+    `compare_artifacts(comparison_type="run_dir")` PARAM-delta extension.
+    """
     def scan(p: Path) -> set[str]:
         items: set[str] = set()
         for entry in p.rglob("*"):
@@ -203,6 +208,29 @@ def _diff_dirs(
             "right_value": only_right,
             "description": f"{len(only_right)} file(s) only in right directory",
         })
+
+    # PARAM-delta extension. Compare PARAM.in if both sides have one.
+    left_param = left_path / "PARAM.in"
+    right_param = right_path / "PARAM.in"
+    if left_param.is_file() and right_param.is_file():
+        param_diffs, param_changed = _diff_params(left_param, right_param)
+        param_entry: dict[str, Any] = {
+            "kind": "param_diff",
+            "location": "PARAM.in",
+            "left_value": str(left_param),
+            "right_value": str(right_param),
+            "description": (
+                f"PARAM.in diff between run_dirs ({len(param_diffs)} entry/entries)."
+                if param_changed
+                else "PARAM.in identical between run_dirs."
+            ),
+            "param_changed": param_changed,
+            "entries": param_diffs,
+        }
+        differences.append(param_entry)
+        if param_changed:
+            changed = True
+
     if not differences:
         differences.append({
             "kind": "identical",
@@ -243,26 +271,50 @@ def _diff_params(
     left_path: Path,
     right_path: Path,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Compare two PARAM.in files at section level, then unified diff."""
+    """Compare two PARAM.in files at session+command level, then unified diff."""
     left_text = read_text_file(left_path)
     right_text = read_text_file(right_path)
     left_parsed = parse_param_text(left_text)
     right_parsed = parse_param_text(right_text)
 
-    left_names = [s.name for s in left_parsed.sections] if hasattr(left_parsed, "sections") else [s.name for s in left_parsed.sessions]
-    right_names = [s.name for s in right_parsed.sections] if hasattr(right_parsed, "sections") else [s.name for s in right_parsed.sessions]
+    left_session_count = len(left_parsed.sessions)
+    right_session_count = len(right_parsed.sessions)
 
     differences: list[dict[str, Any]] = []
-    if left_names != right_names:
+    if left_session_count != right_session_count:
         differences.append({
-            "kind": "section_names",
-            "location": "PARAM.in sections",
-            "left_value": left_names,
-            "right_value": right_names,
-            "description": "Section/session names differ between the two PARAM.in files.",
+            "kind": "session_count",
+            "location": "PARAM.in sessions",
+            "left_value": left_session_count,
+            "right_value": right_session_count,
+            "description": (
+                f"Session count differs: left={left_session_count}, right={right_session_count}."
+            ),
         })
 
-    text_diffs, changed = _diff_text_files(left_path, right_path)
+    # Per-session command-name comparison (order-insensitive set diff).
+    for idx in range(max(left_session_count, right_session_count)):
+        left_cmds = (
+            list(left_parsed.sessions[idx].commands) if idx < left_session_count else []
+        )
+        right_cmds = (
+            list(right_parsed.sessions[idx].commands) if idx < right_session_count else []
+        )
+        only_left = sorted(set(left_cmds) - set(right_cmds))
+        only_right = sorted(set(right_cmds) - set(left_cmds))
+        if only_left or only_right:
+            differences.append({
+                "kind": "session_command_diff",
+                "location": f"session {idx + 1}",
+                "left_value": only_left,
+                "right_value": only_right,
+                "description": (
+                    f"Session {idx + 1}: {len(only_left)} command(s) only in left, "
+                    f"{len(only_right)} command(s) only in right."
+                ),
+            })
+
+    text_diffs, _ = _diff_text_files(left_path, right_path)
     differences.extend(text_diffs)
     return differences, (left_text != right_text)
 

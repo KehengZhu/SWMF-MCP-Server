@@ -1,0 +1,181 @@
+# Physical-constraint validation rules for PARAM.in.
+#
+# Evaluated by `inspect_artifact(artifact_type="param", check_rules=True)`.
+# Append-only: add new rules here without touching MCP code.
+#
+# Schema (per rule):
+#   id            - unique short slug
+#   applies_when  - precondition (predicate dict). Rule fires only when this matches.
+#   require       - the predicate that must hold (rule body).
+#   severity      - "block" | "warn" | "info"
+#   reason        - human-readable why
+#
+# Supported predicates:
+#   command_present:        "<#CMD>"                      single command name
+#   command_absent:         "<#CMD>"
+#   command_co_occurs_with: "<#CMD>"                      shorthand for present
+#   command_excludes:       "<#CMD>"
+#   command_order_before:   { first: "<#A>", second: "<#B>" }
+#   param_equals:           { name: <Key>, value: <val>, command: "<#CMD>" }
+#   param_in_range:         { name: <Key>, min: <num>, max: <num>, command: "<#CMD>" }
+#   param_in_set:           { name: <Key>, values: [v1, v2], command: "<#CMD>" }
+#   session_index:          <int>                         constrain to session N
+#
+# `command:` inside a param_* predicate is optional; if omitted, any block whose row
+# carries the named key is checked.
+
+- id: cme_requires_starttime
+  applies_when:
+    command_present: "#CME"
+  require:
+    any_of:
+      - command_present: "#STARTTIME"
+      - command_present: "#INCLUDE"
+  severity: block
+  reason: >-
+    GL/TD/SPHEROMAK flux ropes are placed in HGI/HGR coordinates; without #STARTTIME the
+    magnetogram alignment is undefined and the eruption seed will not match the spec.
+    Restart PARAMs satisfy this via #INCLUDE (RESTART.in or restart.H carries the time).
+
+- id: cme_requires_timeaccurate
+  applies_when:
+    command_present: "#CME"
+  require:
+    param_equals:
+      command: "#TIMEACCURATE"
+      name: IsTimeAccurate
+      value: true
+  severity: block
+  reason: >-
+    A CME eruption must run time-accurate. Steady-state will not propagate the rope.
+
+- id: harmonicsfile_requires_harmonicsgrid
+  applies_when:
+    command_present: "#HARMONICSFILE"
+  require:
+    command_present: "#HARMONICSGRID"
+  severity: block
+  reason: >-
+    #HARMONICSFILE is consumed together with #HARMONICSGRID; missing the grid block leaves
+    the harmonic expansion unspecified.
+
+- id: poyntingflux_awsom_range
+  applies_when:
+    command_present: "#POYNTINGFLUX"
+  require:
+    param_in_range:
+      command: "#POYNTINGFLUX"
+      name: PoyntingFluxPerBSi
+      min: 3.0e5
+      max: 1.5e6
+  severity: warn
+  reason: >-
+    AWSoM tuning is typically calibrated in the 3e5..1.5e6 J/m^2/s/T band. Outside this
+    range solar-wind speeds drift away from observed L1 values; surface for confirmation.
+
+- id: coronalheating_lperp_range
+  applies_when:
+    command_present: "#CORONALHEATING"
+  require:
+    param_in_range:
+      command: "#CORONALHEATING"
+      name: LperpTimesSqrtBSi
+      min: 5.0e4
+      max: 5.0e5
+  severity: warn
+  reason: >-
+    AWSoM coronal heating LperpTimesSqrtBSi is conventionally O(1e5). Values far outside
+    this band should be confirmed; common typos place the exponent off by one.
+
+- id: componentmap_present
+  applies_when: {}
+  require:
+    command_present: "#COMPONENTMAP"
+  severity: warn
+  reason: >-
+    #COMPONENTMAP is required for multi-component runs. A single-component case is fine
+    without it but should be confirmed.
+
+- id: saverestart_for_long_run
+  applies_when:
+    command_present: "#CME"
+  require:
+    command_present: "#SAVERESTART"
+  severity: warn
+  reason: >-
+    A CME eruption run that does not save restart files cannot be checkpointed or
+    re-launched without redoing the background; recommended to enable.
+
+- id: cme_typecme_matches_spec_fr_type
+  applies_when:
+    command_present: "#CME"
+  require:
+    param_in_set:
+      command: "#CME"
+      name: TypeCme
+      values: ["GL", "TD", "TitovDemoulin", "SPHEROMAK", "Spheromak", "Cone"]
+  severity: warn
+  reason: >-
+    The TypeCme value should match a known flux-rope or cone family. CCMC submissions that
+    label "GL" often map to TypeCme=SPHEROMAK in the operational PARAM; surface the
+    translation rather than picking silently.
+
+- id: cme_velocity_positive
+  applies_when:
+    command_present: "#CME"
+  require:
+    param_in_range:
+      command: "#CME"
+      name: uCme
+      min: 0.0
+      max: 5000.0
+  severity: warn
+  reason: >-
+    CME eruption speed should be a positive km/s value within an observationally plausible
+    range; values outside 0..5000 km/s are typically a unit or sign mistake.
+
+- id: stop_present_in_each_session
+  applies_when:
+    command_present: "#RUN"
+  require:
+    command_present: "#STOP"
+  severity: info
+  reason: >-
+    Multi-session PARAMs should declare a #STOP per session. Check the runlog cadence if
+    this fires.
+
+- id: cme_requires_helioupdateb0
+  applies_when:
+    command_present: "#CME"
+  require:
+    command_present: "#HELIOUPDATEB0"
+  severity: warn
+  reason: >-
+    CME runs need the rotating B0 update cadence. Without #HELIOUPDATEB0 the threaded-
+    field-line region drifts off the magnetogram alignment over the eruption window.
+
+- id: harmonicsfile_path_under_sc
+  applies_when:
+    command_present: "#HARMONICSFILE"
+  require:
+    param_in_set:
+      command: "#HARMONICSFILE"
+      name: NameHarmonicsFile
+      values:
+        - "SC/mf.dat"
+        - "SC/harmonics_adapt.dat"
+        - "SC/harmonics_bxyz.dat"
+  severity: info
+  reason: >-
+    The harmonics file is conventionally placed under SC/ in the run directory. A path
+    outside SC/ likely won't match the run-prep step.
+
+- id: mflampa_couple_cadence_present
+  applies_when:
+    command_present: "#FIELDLINE"
+  require:
+    command_present: "#COUPLE1"
+  severity: warn
+  reason: >-
+    SOFIE+MFLAMPA runs require explicit SC↔SP and IH↔SP coupling cadences. Missing
+    #COUPLE1 means the SP component never receives field lines.

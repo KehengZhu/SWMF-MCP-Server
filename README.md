@@ -59,7 +59,7 @@ Requirements:
 - `make`
 - network access the first time dependencies are resolved with `uv`
 
-Bootstrap the local runtime:
+Bootstrap the local runtime and build the local knowledge index:
 
 ```bash
 make
@@ -70,13 +70,26 @@ make
 Install one agent bundle:
 
 ```bash
-make install AGENT=claude SWMF_ROOT=/data/SWMF
+make install AGENT=claude
 make install AGENT=copilot-vscode SWMF_ROOT=/data/SWMF
-make install AGENT=copilot-cli SWMF_ROOT=/data/SWMF
+make install AGENT=copilot-cli SWMF_ROOT=/data/SWMF SWMFSOLAR_ROOT=/data/SWMFSOLAR
 make install AGENT=codex SWMF_ROOT=/data/SWMF SWMF_IDL_EXEC=/path/to/idl
+make install AGENT=claude TARGET_DIR=/path/to/workspace SWMF_ROOT=/data/SWMF
 ```
 
-`make install` writes one agent-specific config file, symlinks the matching instruction file to the shared discipline source, and symlinks the agent skill tree to `src/agent_assets/skills`.
+`AGENT` is required for `make install` and must be one of `claude`, `copilot-vscode`, `copilot-cli`, or `codex`.
+
+`SWMF_ROOT` defaults to `./SWMF` relative to this repository. `SWMF_IDL_EXEC` is optional and is written only when passed. `SWMFSOLAR_ROOT` is optional; when omitted during `make install`, the installer auto-detects it and writes only the first existing match from:
+
+- a sibling of the chosen `SWMF_ROOT`
+- `./SWMFSOLAR` in this repository
+- `TARGET_DIR/SWMFSOLAR`
+
+`TARGET_DIR` defaults to this repository. When `TARGET_DIR` points elsewhere, `make install` also creates `TARGET_DIR/.swmf_mcp_server` as a symlink back to this repo so the generated agent config can still reference the server.
+
+Unlike `make`, `make install` bootstraps the Python runtime if needed but does not warm the embedding cache or rebuild the knowledge index.
+
+`make install` writes exactly one agent-specific config surface, symlinks the matching instruction file to the shared discipline source, and symlinks the agent skill tree from `src/agent_assets/skills`.
 
 When the agent is launched in your project directory, it should be able to load MCP tools and skills automatically.
 

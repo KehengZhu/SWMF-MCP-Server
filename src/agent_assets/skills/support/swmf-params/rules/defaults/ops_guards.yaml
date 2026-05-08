@@ -1,0 +1,41 @@
+# Operational guards: defaults that apply across archetypes when the spec is silent.
+#
+# Loaded by `swmf-replicate`. Apply only at step 5 of the authoring ladder (spec →
+# derivation → recipe → template → DEFAULT → practice → gap). Every emitted value is
+# tagged `provenance=default:<id>`.
+
+- id: cpu_time_max_default
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme, awsom_steady_sc]
+  defaults:
+    "#CPUTIMEMAX.CpuTimeMax": "44 h"
+  assumptions:
+    - "44 h matches Frontera/Pleiades 48 h queue limits with safety margin; reduce on shorter queues."
+  evidence: "CCMC operational default; SWMFSOLAR Run_Max_RP_CME3/run01."
+
+- id: minimum_pressure_default
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme, awsom_steady_sc]
+  defaults:
+    "#MINIMUMPRESSURE.MinimumPressure": 1.0e-9
+  assumptions:
+    - "Floor prevents negative-pressure failures during shock passage; raising it can mask real instability."
+  evidence: "SWMFSOLAR Param/PARAM.in.awsomr.CME default."
+
+- id: minimum_temperature_default
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme, awsom_steady_sc]
+  defaults:
+    "#MINIMUMTEMPERATURE.MinimumTemperature": 5.0e4
+  assumptions:
+    - "Floor prevents negative-temperature failures; consistent with the chromospheric base."
+  evidence: "SWMFSOLAR Param/PARAM.in.awsomr.CME default."
+
+- id: dt_update_b0_default
+  applies_when:
+    case_archetype: [awsom_cme_eruption, sofie_mflampa_cme]
+  defaults:
+    "#HELIOUPDATEB0.DtUpdateB0": 300.0
+  assumptions:
+    - "300 s update cadence keeps the rotating B0 fresh without dominating runtime."
+  evidence: "Standard CME-run cadence in SWMFSOLAR templates."

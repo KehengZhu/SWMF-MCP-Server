@@ -23,11 +23,14 @@ description: "Use when something is broken or suspicious: run crash, wrong resul
 
 1. **Inspect artifact first** — always start from the failure artifact:
    ```
-   inspect_artifact(artifact_type="log",     path=<log>)      # crashes, runtime errors
-   inspect_artifact(artifact_type="param",   path=<PARAM.in>) # input failures
-   inspect_artifact(artifact_type="run_dir", path=<run_dir>)  # layout/startup
+   inspect_artifact(artifact_type="log",     path=<log>)                   # crashes, runtime errors
+   inspect_artifact(artifact_type="param",   path=<PARAM.in>, check_rules=True)  # input failures
+   inspect_artifact(artifact_type="run_dir", path=<run_dir>)                # layout/startup
    ```
-   Read `findings`. Identify the failure family.
+   Read `findings`. Identify the failure family. The param inspector returns
+   structural primitives plus rule-violation evidence; for intent reasoning
+   about the failing PARAM (which command misfired in which session), read
+   the PARAM.in file directly after this step.
    Do not directly read whole runlogs unless the user explicitly requests raw
    log content; use only bounded follow-up excerpts after `inspect_artifact`.
 
@@ -57,6 +60,11 @@ description: "Use when something is broken or suspicious: run crash, wrong resul
 * `numerical_physics_anomaly` — NaN, overflow, implausible output
 * `postprocess_restart_output` — restart or output format problem
 * `source_change_validation` — regression after a code change
+* `cluster_boundary` — failure outside SWMF: walltime exceeded, OOM kill,
+  module/license errors, node failure, scheduler SIGTERM. Surfaced by the
+  log inspector's `cluster_failure_signatures` finding. Hand off to
+  `swmf-replicate` cluster-recovery section for resubmission strategy;
+  recovery is shell-side, not a code fix.
 
 State the failure family before proposing any fix.
 
