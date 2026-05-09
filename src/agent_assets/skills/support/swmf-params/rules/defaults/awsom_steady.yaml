@@ -1,0 +1,172 @@
+# AWSoM / AWSoM-R steady-state background defaults.
+# Applies to PARAM.expand.start (background PARAM) for awsom_steady_sc and
+# awsom_cme_eruption archetypes. Apply at step 5 of the authoring ladder.
+# Tag emitted values with `provenance=default:<id>`.
+
+- id: awsom_sc_gridblockall
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#GRIDBLOCKALL.MaxBlock.SC": 200000
+  assumptions:
+    - "200000 blocks for standard AWSoM/AWSoM-R g=6,8,8 or g=8,8,4 grid."
+    - "Reduce to 120000 for coarser grids; increase for fine AMR around ARs."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom."
+
+- id: awsom_ih_gridblockall
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#GRIDBLOCKALL.MaxBlock.IH": 160000
+  assumptions:
+    - "160000 IH blocks for standard AWSoM/AWSoM-R CME runs (no MFLAMPA)."
+    - "Increase to 200000 for higher-resolution IH or global steady-state backgrounds."
+    - "Use 2400000 if SOFIE+MFLAMPA (see sofie_cme.yaml)."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsomr.CME IH GRIDBLOCKALL."
+
+- id: awsom_harmonicsgrid_params
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#HARMONICSGRID.rMagnetogram": 1.0
+    "#HARMONICSGRID.rSourceSurface": 25
+    "#HARMONICSGRID.IsLogRadius": true
+    "#HARMONICSGRID.MaxOrder": 180
+    "#HARMONICSGRID.nR": 400
+    "#HARMONICSGRID.nLon": 180
+    "#HARMONICSGRID.nLat": 90
+  assumptions:
+    - "rSourceSurface=25 matches the AWSoM/AWSoM-R SC outer boundary (~24 Rs)."
+    - "IsLogRadius=T; contrast with SOFIE (IsLogRadius=F, rSourceSurface=2.5)."
+    - "MaxOrder=180 and nR=400 provide sufficient harmonic resolution for solar-wind modeling."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom and PARAM.in.awsomr.CME."
+
+- id: awsom_harmonicsfile_path
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#HARMONICSFILE.NameHarmonicsFile": "SC/harmonics_adapt.dat"
+  assumptions:
+    - "ADAPT magnetogram harmonics file. Change to SC/mf.dat for SOFIE or GONG-derived files."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsomr.CME."
+
+- id: awsom_steady_scheme_session1
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+    session_index: 1
+  defaults:
+    "#SCHEME.nOrder": 2
+    "#SCHEME.TypeFlux": "Linde"
+    "#SCHEME.TypeLimiter": "minmod"
+  assumptions:
+    - "Session 1 uses minmod (conservative) limiter for safe initial AMR ramp."
+    - "Upgrade to mc3+1.2 in session 2 after AMR settles."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom session 1."
+
+- id: awsom_steady_scheme_session2plus
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#SCHEME.TypeLimiter": "mc3"
+    "#SCHEME.LimiterBeta": 1.2
+  assumptions:
+    - "mc3 limiter with LimiterBeta=1.2 provides better resolution for steady-state solutions."
+    - "Apply from session 2 onward after the initial transient has damped."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom session 2+."
+
+- id: awsom_ih_scheme_session_activate
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+  defaults:
+    "#SCHEME.nOrder.IH.first_session": 1
+    "#SCHEME.TypeFlux.IH.first_session": "Linde"
+  assumptions:
+    - "When IH is first activated (coupling session), start with nOrder=1 Linde (first-order flux)."
+    - "Upgrade to nOrder=2, Linde, mc3 in the second AMR-enabled IH session."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom session 4 vs 5."
+
+- id: awsom_saverestart_steady
+  applies_when:
+    case_archetype: awsom_steady_sc
+  defaults:
+    "#SAVERESTART.DoSaveRestart": true
+    "#SAVERESTART.DnSaveRestart": 20000
+    "#SAVERESTART.DtSaveRestart": -1.0
+  assumptions:
+    - "Steady-state restart saves are iteration-based (every 20000 iterations)."
+    - "Switch to DtSaveRestart=3600, DnSaveRestart=-1 for time-accurate eruption PARAMs."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom and PARAM.in.sofie.CCMC."
+
+- id: awsom_divb_ih
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption, sofie_mflampa_cme]
+  defaults:
+    "#DIVB.UseDivbSource": true
+    "#DIVB.UseDivbDiffusion": true
+    "#DIVB.UseProjection": false
+    "#DIVB.UseConstrainB": false
+  assumptions:
+    - "UseDivbDiffusion=T in IH improves polar/axial B-field quality (especially near z-axis)."
+    - "In SC, UseDivbDiffusion is typically F (not needed with inner boundary constraints)."
+    - "UseProjection and UseConstrainB are F across all operational templates."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom IH section; PARAM.in.awsomr.CME IH section."
+
+- id: awsom_timestepping_sc
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption, sofie_mflampa_cme]
+  defaults:
+    "#TIMESTEPPING.nStage": 2
+    "#TIMESTEPPING.CflExpl": 0.8
+  assumptions:
+    - "nStage=2, cfl=0.8 is the operating default across all AWSoM variants."
+    - "Halve cfl to 0.4 during initial AMR ramp if Alfvén-wave reflections at inner boundary blow up."
+  evidence: "All SWMFSOLAR PARAM templates."
+
+- id: awsom_minimumradialspeed
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption]
+    session_index: 1
+  defaults:
+    "#MINIMUMRADIALSPEED.UseSpeedMin": true
+    "#MINIMUMRADIALSPEED.rSpeedMin": 10
+    "#MINIMUMRADIALSPEED.SpeedMinDim": 250
+    "#MINIMUMRADIALSPEED.TauSpeedMinDim": "10 h"
+  assumptions:
+    - "Speed floor prevents spurious negative-radial-velocity regions in early iterations."
+    - "Disable (#MINIMUMRADIALSPEED F) in the last steady-state session before IH coupling."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom session 1-2; PARAM.in.awsomr.CME."
+
+- id: awsom_limiter_flags
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption, sofie_mflampa_cme]
+  defaults:
+    "#LIMITER.UseLogRhoLimiter": true
+    "#LIMITER.UseLogPLimiter": true
+    "#LIMITER.UseRhoRatioLimiter": false
+  assumptions:
+    - "Log limiters for density and pressure prevent negativity near the inner boundary."
+    - "RhoRatioLimiter is off; it is rarely needed and can suppress real density structures."
+  evidence: "All SWMFSOLAR CME and steady-state PARAM templates."
+
+- id: awsom_reschange
+  applies_when:
+    case_archetype: [awsom_steady_sc, awsom_cme_eruption, sofie_mflampa_cme]
+  defaults:
+    "#RESCHANGE.UseAccurateReschange": true
+  assumptions:
+    - "AccurateReschange is required at AMR resolution boundaries for correct wave propagation."
+    - "Setting false degrades shock structure near refinement interfaces."
+  evidence: "All SWMFSOLAR PARAM templates."
+
+- id: awsom_steady_session_ladder
+  applies_when:
+    case_archetype: awsom_steady_sc
+  ladder:
+    - {session: 1, MaxIter: 1000,  role: "SC-only initial AMR ramp with minmod limiter"}
+    - {session: 2, MaxIter: 70000, role: "SC-only AMR converge with mc3 limiter"}
+    - {session: 3, MaxIter: 80000, role: "freeze SC AMR; disable MINIMUMRADIALSPEED"}
+    - {session: 4, MaxIter: 80001, role: "activate IH, one-step coupling SC->IH"}
+    - {session: 5, MaxIter: 83000, role: "IH AMR enabled; SC disabled"}
+    - {session: 6, MaxIter: 85000, role: "freeze IH AMR"}
+  scaling: "Calibrated for standard AWSoM g=6,8,8 grid. Scale proportionally for denser grids."
+  evidence: "SWMFSOLAR/Param/PARAM.in.awsom session sequence."

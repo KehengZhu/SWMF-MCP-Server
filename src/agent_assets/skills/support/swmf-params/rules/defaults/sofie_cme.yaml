@@ -1,0 +1,167 @@
+# SOFIE CME eruption session-specific defaults.
+# Applies to PARAM.expand.restart (eruption PARAM) for the sofie_mflampa_cme archetype.
+# Apply at step 5 of the authoring ladder (after spec, derivation, recipe, template).
+# Tag emitted values with `provenance=default:<id>`.
+
+- id: sofie_eruption_session1_stop
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 1
+  defaults:
+    "#STOP.TimeMax": "1 h"
+  assumptions:
+    - "Session 1 runs 1 h to seed the flux rope through SC before SC↔IH coupling."
+    - "Reduce for very fast CMEs; extend if the rope propagation is slow."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA: session 1 stop = 1 h."
+
+- id: sofie_eruption_session2_stop
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 2
+  defaults:
+    "#STOP.TimeMax": "4 h"
+  assumptions:
+    - "Session 2 ends at 4 h total: turns off CME seeding and tightens IH coupling to 120 s."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA: session 2 stop = 4 h."
+
+- id: sofie_eruption_session3_stop
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 3
+  defaults:
+    "#STOP.TimeMax": "13 h"
+  assumptions:
+    - "Session 3 ends at 13 h total; the CME must fully exit SC (rMax ~24 Rs)."
+    - "Extend to 17–20 h for fast CMEs (> 1500 km/s) or coarser grids."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA: session 3 stop = 13 h."
+
+- id: sofie_eruption_session4_stop
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 4
+  defaults:
+    "#STOP.TimeMax": "4 d"
+  assumptions:
+    - "Session 4 (IH-only) propagates the CME to 1 AU (~215 Rs). 4 d sufficient for 500–1000 km/s."
+    - "Extend for slow CMEs; check IH earth.sat output to confirm L1 arrival."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA: session 4 stop = 4 d."
+
+- id: sofie_sc_gridblockall
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+  defaults:
+    "#GRIDBLOCKALL.MaxBlock.SC": 120000
+  assumptions:
+    - "120000 blocks sufficient for SOFIE g=8,8,4 grid with CME AMR box."
+    - "Increase to 200000 for higher-resolution runs or large AMR regions."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA."
+
+- id: sofie_ih_gridblockall
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+  defaults:
+    "#GRIDBLOCKALL.MaxBlock.IH": 2400000
+  assumptions:
+    - "2400000 IH blocks required for full heliospheric domain at SOFIE+MFLAMPA resolution."
+    - "Much larger than non-MFLAMPA CME runs (160000). Under-allocation causes crash early in run."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA."
+
+- id: sofie_harmonicsgrid_params
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+  defaults:
+    "#HARMONICSGRID.rMagnetogram": 1.0
+    "#HARMONICSGRID.rSourceSurface": 2.5
+    "#HARMONICSGRID.IsLogRadius": false
+    "#HARMONICSGRID.MaxOrder": 90
+    "#HARMONICSGRID.nR": 100
+    "#HARMONICSGRID.nLon": 180
+    "#HARMONICSGRID.nLat": 90
+  assumptions:
+    - "rSourceSurface=2.5 Rs is the PFSS standard for SaMhd; NOT the AWSoM value of 25."
+    - "IsLogRadius=F for SOFIE; contrast with AWSoM/AWSoM-R (IsLogRadius=T)."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA and PARAM.in.sofie.CCMC."
+
+- id: sofie_fieldlinethread_params
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+  defaults:
+    "#FIELDLINETHREAD.nPointThreadMax": 200
+    "#FIELDLINETHREAD.DsThreadMin": 2.0e-3
+  assumptions:
+    - "The CCMC background uses 400 / 1e-3; the eruption PARAM uses 200 / 2e-3."
+    - "Match the eruption template values; thread-count mismatch with the restart can cause aborts."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA."
+
+- id: sofie_couple1_sc_ih_session1
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 1
+  defaults:
+    "#COUPLE1.SC->IH.DtCouple": "10 h"
+  assumptions:
+    - "Loose 10 h coupling during the 1 h CME seed session avoids expensive coupling overhead."
+    - "Tighten to 120 s in session 2 and 30 s in session 3 as the shock enters IH."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA session 1 COUPLE1."
+
+- id: sofie_couple1_sc_ih_session2
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 2
+  defaults:
+    "#COUPLE1.SC->IH.DtCouple": "120 s"
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA session 2 COUPLE1."
+
+- id: sofie_couple1_sc_ih_session3
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 3
+  defaults:
+    "#COUPLE1.SC->IH.DtCouple": "30 s"
+  assumptions:
+    - "30 s coupling in session 3 preserves the shock structure as it crosses the SC/IH interface."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA session 3 COUPLE1."
+
+- id: sofie_timesteplimit_sc_session4
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+    session_index: 4
+  defaults:
+    "#TIMESTEPLIMIT.DtLimitDim.SC": 120
+  assumptions:
+    - "SC timestep cap at 120 s in the IH-only phase prevents the adaptive timestep from growing."
+    - "Without this, SC can take multi-hour steps and miss synchronization with SP coupling."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA session 4 TIMESTEPLIMIT."
+
+- id: sofie_sp_componentmap_entry
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+  defaults:
+    "#COMPONENTMAP.SP": "SP 0 647 2"
+  assumptions:
+    - "SP/MFLAMPA does not scale to the full job width; rank-bounded entry is required."
+    - "Upper rank 647 assumes a 648-rank job (common on Frontera/Pleiades). Adjust for different job sizes."
+  evidence: "examples/CCMC_run_weihao PARAM.expand.restart; SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA."
+
+- id: sofie_fieldline_registry
+  applies_when:
+    case_archetype: sofie_mflampa_cme
+    param_file: restart
+  defaults:
+    "#FIELDLINE.SP.SC.RScMin": 1.105
+    "#FIELDLINE.SP.SC.RScMax": 21
+    "#FIELDLINE.SP.IH.RIhMin": 19
+    "#FIELDLINE.SP.IH.RIhMax": 500
+  assumptions:
+    - "Field-line boundaries overlap by 2 Rs (SC 19–21; IH 19–21) for smooth handoff."
+    - "RIhMax=500 covers the MFLAMPA domain to ~2.3 AU; increase for outer heliosphere runs."
+  evidence: "SWMFSOLAR/Param/PARAM.in.sofie.MFLAMPA #FIELDLINE."

@@ -179,3 +179,189 @@
   reason: >-
     SOFIE+MFLAMPA runs require explicit SC↔SP and IH↔SP coupling cadences. Missing
     #COUPLE1 means the SP component never receives field lines.
+
+# ── SOFIE / SaMhd consistency ───────────────────────────────────────────────
+
+- id: sofie_curlb0_requires_b0source
+  applies_when:
+    command_present: "#CURLB0"
+  require:
+    command_present: "#B0SOURCE"
+  severity: block
+  reason: >-
+    #CURLB0 and #B0SOURCE are paired in the SaMhd (SOFIE) model. CURLB0 enables
+    the curl-B0 correction for the current-free region; #B0SOURCE activates the
+    full B0 divergence correction. Enabling one without the other produces
+    inconsistent MHD evolution near the inner boundary.
+
+- id: sofie_b0source_requires_curlb0
+  applies_when:
+    command_present: "#B0SOURCE"
+  require:
+    command_present: "#CURLB0"
+  severity: block
+  reason: >-
+    Paired with sofie_curlb0_requires_b0source. #B0SOURCE without #CURLB0 leaves
+    the current-free region corrections incomplete.
+
+- id: sofie_alignbandu_when_curlb0
+  applies_when:
+    command_present: "#CURLB0"
+  require:
+    command_present: "#ALIGNBANDU"
+  severity: warn
+  reason: >-
+    SOFIE SaMhd runs activate stream-aligned MHD via #ALIGNBANDU (UseSaMhd=T,
+    RSourceSaMhd=1.1, RMinSaMhd=5.5). If #CURLB0 is present but #ALIGNBANDU is
+    absent, B0 corrections are computed without the stream-aligned scheme,
+    contradicting the SaMhd model assumptions.
+
+- id: fieldlinethread_requires_threads_innerboundary
+  applies_when:
+    command_present: "#FIELDLINETHREAD"
+  require:
+    param_in_set:
+      command: "#OUTERBOUNDARY"
+      name: TypeBc1
+      values: ["fieldlinethreads"]
+  severity: block
+  reason: >-
+    When #FIELDLINETHREAD is enabled, the SC inner boundary (TypeBc1 in
+    #OUTERBOUNDARY) must be "fieldlinethreads". Any other BC type (e.g. "user")
+    bypasses the threaded-field-line region and produces wrong inner-boundary
+    wind speeds.
+
+# ── MFLAMPA / SP consistency ────────────────────────────────────────────────
+
+- id: mflampa_fieldline_requires_componentmap
+  applies_when:
+    command_present: "#FIELDLINE"
+  require:
+    command_present: "#COMPONENTMAP"
+  severity: block
+  reason: >-
+    #FIELDLINE activates the SP/MFLAMPA component; SP must appear in
+    #COMPONENTMAP (e.g. "SP 0 647 2") before the field-line registry is
+    activated, otherwise SP ranks are not reserved and SWMF will abort.
+
+# ── IH component consistency ─────────────────────────────────────────────────
+
+- id: ih_buffergrid_requires_innerboundary_buffergrid
+  applies_when:
+    command_present: "#BUFFERGRID"
+  require:
+    command_present: "#INNERBOUNDARY"
+  severity: block
+  reason: >-
+    #BUFFERGRID defines the SC/IH coupling buffer region; it is only read when
+    #INNERBOUNDARY is set to "buffergrid". Missing #INNERBOUNDARY means the
+    buffer grid is parsed but never activated and SC→IH coupling silently uses
+    the default inner boundary.
+
+- id: couple1_required_when_ih_active
+  applies_when:
+    command_present: "#COMPONENT"
+  require:
+    command_present: "#COUPLE1"
+  severity: warn
+  reason: >-
+    When a #COMPONENT block enables IH (UseComp=T), at least one #COUPLE1
+    SC→IH block must appear in the same or a preceding session. An active IH
+    component with no coupling runs in isolation and its output diverges from
+    the SC wind state.
+
+# ── Magnetogram / harmonics ──────────────────────────────────────────────────
+
+- id: harmonicsgrid_rmagnetogram_one
+  applies_when:
+    command_present: "#HARMONICSGRID"
+  require:
+    param_equals:
+      command: "#HARMONICSGRID"
+      name: rMagnetogram
+      value: 1.0
+  severity: warn
+  reason: >-
+    rMagnetogram is the photospheric radius in units of Rs and should be exactly
+    1.0. Non-unity values rescale the harmonics amplitude and shift the B0 field.
+
+# ── Radiation cooling ────────────────────────────────────────────────────────
+
+- id: radiativecooling_requires_lookuptable
+  applies_when:
+    command_present: "#RADIATIVECOOLING"
+  require:
+    command_present: "#LOOKUPTABLE"
+  severity: warn
+  reason: >-
+    When #RADIATIVECOOLING is enabled, the SC component expects the "radcool"
+    and "TR" lookup tables to be loaded before the first step. A missing
+    #LOOKUPTABLE block causes a runtime file-not-found error after init.
+
+# ── CME PARAM correctness ────────────────────────────────────────────────────
+
+- id: cme_userswitch_perturb_required
+  applies_when:
+    command_present: "#CME"
+  require:
+    param_in_set:
+      command: "#USERSWITCH"
+      name: StringSwitch
+      values:
+        - "+init +ic +perturb"
+        - "+perturb +init +ic"
+        - "+ic +init +perturb"
+        - "+init +perturb +ic"
+  severity: block
+  reason: >-
+    The CME eruption session requires "+perturb" in #USERSWITCH to activate the
+    flux-rope seeding routine. Without "+perturb" the #CME block is parsed but
+    the initial condition perturbation is never applied and the flux rope will
+    not appear.
+
+- id: steady_state_no_cme
+  applies_when:
+    param_equals:
+      command: "#TIMEACCURATE"
+      name: IsTimeAccurate
+      value: false
+  require:
+    command_absent: "#CME"
+  severity: warn
+  reason: >-
+    A steady-state (IsTimeAccurate=F) PARAM should not contain an active #CME
+    block. The steady-state solver will not propagate a flux rope; the block is
+    silently inactive and likely indicates a copy-paste mistake from the eruption
+    PARAM.
+
+- id: saverestart_dt_positive_for_cme
+  applies_when:
+    command_present: "#CME"
+  require:
+    param_in_range:
+      command: "#SAVERESTART"
+      name: DtSaveRestart
+      min: 300.0
+      max: 86400.0
+  severity: warn
+  reason: >-
+    CME eruption runs should save restart files on a time-based cadence
+    (DtSaveRestart > 0). Iteration-based restart saves lose checkpoint alignment
+    for time-accurate sessions and make manual restart harder after a queue
+    failure.
+
+- id: helioupdateb0_dt_positive
+  applies_when:
+    command_present: "#HELIOUPDATEB0"
+  require:
+    param_in_range:
+      command: "#HELIOUPDATEB0"
+      name: DtUpdateB0
+      min: 1.0
+      max: 3600.0
+  severity: warn
+  reason: >-
+    DtUpdateB0 must be a positive time interval (seconds) during the eruption
+    window. Value -1 disables the update and is only appropriate when explicitly
+    turning it off in a later session (e.g. session 2 of sofie_mflampa_cme after
+    the rope is seeded).

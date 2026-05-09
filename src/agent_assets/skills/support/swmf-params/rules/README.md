@@ -31,6 +31,31 @@ value wins; the agent records the supplying step as that value's provenance.
 Validation rules and `Scripts/TestParam.pl` run on the *result* at the launch gate; they
 are not part of authoring. The ladder is "produce, then validate."
 
+## Current file inventory
+
+### defaults/
+| File | Contents |
+| ---- | -------- |
+| `ops_guards.yaml` | `#CPUTIMEMAX`, `#MINIMUMPRESSURE`, `#MINIMUMTEMPERATURE`, `#HELIOUPDATEB0` |
+| `cme_eruption.yaml` | SPHEROMAK shape, couple cadence, savePlot CME entries |
+| `session_ladders.yaml` | Iteration count ladders per archetype |
+| `build_flags.yaml` | `Config.pl` flags per archetype |
+| `sofie_cme.yaml` | SOFIE session timing, GRIDBLOCKALL, HARMONICSGRID, COUPLE1 cadences, FIELDLINE registry |
+| `awsom_steady.yaml` | AWSoM steady-state session ladder, HARMONICSGRID, SCHEME progression, DIVB, RESCHANGE |
+
+### case_recipes/
+| File | Archetype |
+| ---- | --------- |
+| `awsom_cme_eruption.md` | AWSoM/AWSoM-R CME eruption (start + restart) |
+| `sofie_mflampa_cme.md` | SOFIE + MFLAMPA CME eruption (start + restart) |
+| `awsom_steady_sc.md` | AWSoM/AWSoM-R/SOFIE steady-state SC+IH background |
+
+### derivations/
+| File | Contents |
+| ---- | -------- |
+| `geometric.yaml` | CMEbox bounds, coneIH rotation, MFLAMPA ORIGIN/GRIDNODE, Poynting flux, coronal heating |
+| `spheromak_shape.yaml` | GL→SPHEROMAK TypeCme translation |
+
 ## Maintenance contract
 
 Each YAML file is append-only extendable: drop a new entry, no code change.
