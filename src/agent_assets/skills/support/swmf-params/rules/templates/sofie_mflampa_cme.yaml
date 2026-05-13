@@ -23,7 +23,6 @@ recipe: case_recipes/sofie_mflampa_cme.md
 secondary_precedents:
   - SWMFSOLAR/Param/PARAM.in.sofie.CME
   - SWMFSOLAR/Param/PARAM.in.awsomr.CME
-  - SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in
   - examples/CCMC_run_weihao/Weihao_Liu_011326_SH_1_PARAM.expand.start
   - examples/CCMC_run_weihao/Weihao_Liu_011326_SH_1_PARAM.expand.restart
 

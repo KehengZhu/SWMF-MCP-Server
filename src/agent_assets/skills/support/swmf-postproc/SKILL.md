@@ -50,8 +50,7 @@ Call this first for any run-directory or postprocessing task. Treat
 artifacts and deciding whether the tree is live, postprocessed, restart-only,
 or partial.
 Prefer an existing extracted run directory over an archive when both are
-present. For `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01`; treat
-`Run_Max_RP_CME3.tar.gz` only as a fallback/source archive.
+present; treat a colocated tarball as a fallback/source archive only.
 Run-dir inspection now includes concise PARAM-derived run-intent evidence
 (session timeline, control settings, and `#SAVEPLOT` essentials) and should be
 used before inferring IDL plotting cadence.

@@ -51,6 +51,50 @@ Support skills:
 The shared discipline source is
 [`src/agent_assets/SWMF_CORE_DISCIPLINE.md`](src/agent_assets/SWMF_CORE_DISCIPLINE.md).
 
+## AI-Assisted Install
+
+If you are already inside an AI coding agent (Claude Code, GitHub Copilot, Codex CLI), copy the prompt below, fill in the two placeholders, and paste it into the agent. The agent will handle path discovery and run the right install command for you.
+
+| Placeholder | What to put |
+|---|---|
+| `<AGENT>` | `claude`, `copilot-vscode`, `copilot-cli`, or `codex` |
+| `<TARGET_DIR>` | Absolute path to the project directory where SWMF AI should be installed |
+
+```
+I want to install SWMF AI into <TARGET_DIR> for use with the <AGENT> agent.
+
+The SWMF AI repository is at: <absolute path to this swmf-mcp-prototype directory>
+
+Please complete the following steps in order:
+
+1. Run `make` inside the swmf-mcp-prototype repository to bootstrap the Python
+   runtime and build the knowledge index. Wait for it to succeed before continuing.
+
+2. Find the SWMF source root. Check in order:
+   a. The environment variable $SWMF_ROOT if set.
+   b. A directory named "SWMF" that is a sibling of the swmf-mcp-prototype directory.
+   c. Any other existing path named "SWMF" visible from the current machine.
+   Report the resolved absolute path, or ask me if none is found.
+
+3. Find SWMFSOLAR if it exists. Check in order:
+   a. A directory named "SWMFSOLAR" that is a sibling of the SWMF root found above.
+   b. A directory named "SWMFSOLAR" that is a sibling of the swmf-mcp-prototype directory.
+   Report the resolved absolute path, or skip if none exists.
+
+4. Run `which idl` to find the IDL executable. Report the path, or skip if not found.
+
+5. Run the install command, substituting the paths discovered above:
+
+   make install \
+     AGENT=<AGENT> \
+     TARGET_DIR=<TARGET_DIR> \
+     SWMF_ROOT=<path from step 2> \
+     [SWMF_IDL_EXEC=<path from step 4>] \
+     [SWMFSOLAR_ROOT=<path from step 3>]
+
+   Omit SWMF_IDL_EXEC and SWMFSOLAR_ROOT if those paths were not found.
+```
+
 ## Install & Usage
 
 Requirements:

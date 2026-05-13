@@ -30,7 +30,7 @@
   assumptions:
     - "Cone opening angles in spec are interpreted as full angles, not half-angles."
     - "CMEbox radial extent fixed at 1.1..22 Rs (template default)."
-  evidence: "CCMC weihao standard answer; SWMFSOLAR/Run_Max_RP_CME3/run01."
+  evidence: "CCMC weihao standard answer (examples/CCMC_run_weihao/)."
 
 - id: coneih_rotation_from_fr
   applies_when:

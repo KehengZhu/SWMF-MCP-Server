@@ -110,8 +110,9 @@ def test_idl_animation_playbook_documents_out_to_outs_workflow() -> None:
     assert 'get_evidence(query="animate_data"' in playbook_text
     assert "single-snapshot" in playbook_text
     assert "multi-snapshot" in playbook_text
-    assert "prefer an existing extracted run directory over an archive" in analyze_text
-    assert "SWMFSOLAR/Run_Max_RP_CME3/run01" in postproc_text
+    assert "prefer an existing extracted run directory over an archive" in analyze_text.lower() or \
+           "Prefer an existing extracted run directory over an archive" in analyze_text
+    assert "extracted run directory over an archive" in postproc_text
 
 
 def test_run_dir_postprocessing_skills_require_inspection_first() -> None:

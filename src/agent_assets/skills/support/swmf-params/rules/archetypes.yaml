@@ -1,0 +1,167 @@
+# Archetype catalog for SWMF replication.
+#
+# Hand-authored. Used by:
+#   * scripts/mine_param_corpus.py — to bucket each in-corpus PARAM into one archetype
+#     before computing the command-intersection.
+#   * swmf-replicate (LLM) — to match a paper's physics description against the
+#     `description` field, picking the archetype label that drives template / recipe
+#     / mined-defaults lookups.
+#
+# Each entry:
+#   id            - stable archetype label; emitted as a key in templates/, case_recipes/,
+#                   and defaults/mined/.
+#   description   - one line, physics-level. LLMs match paper text against this.
+#   model         - equation-set family. One of:
+#                   AwsomAnisoPi | AwsomR | Awsom | AwsomSA | Mhd | OuterHelio | Geospace | Other
+#                   (matches the `e=` part of `Config.pl -o=…:e=…`).
+#   components    - SWMF component IDs expected in #COMPONENTMAP (sorted).
+#   has_CME       - true if #CME block is part of the archetype.
+#   has_MFLAMPA   - true if SP/MFLAMPA component is present (SEP transport).
+#   has_threaded_gap - true if AWSoM-R / SOFIE field-line-thread BC is used.
+#   match_hints   - filename substrings used as a final tiebreaker by the miner. Not
+#                   used by the LLM matcher (the description carries that signal).
+#
+# Coverage: tuned to the solar-physics path that drives the eclipse2024 replication
+# work. Geospace / outer-heliosphere archetypes are placeholders pending corpus
+# review; the miner will report unmatched PARAMs and the catalog grows from there.
+
+- id: awsom_steady_sc_only
+  description: >-
+    AWSoM steady-state SC-only background. Inner solar corona, no IH coupling,
+    no CME. Used for background generation and isolated SC tests.
+  model: Awsom
+  components: [SC]
+  has_CME: false
+  has_MFLAMPA: false
+  match_hints: [PARAM.in.test.SC, PARAM.in.test.EESC, PARAM.in.restart.SC.plot_los]
+
+- id: awsom_anisopi_steady_sc_ih
+  description: >-
+    AWSoM AnisoPi steady-state SC+IH coupled background. No eruption.
+    Used as the precursor PARAM for AWSoM CME runs.
+  model: AwsomAnisoPi
+  components: [SC, IH]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints:
+    - PARAM.in.awsom
+    - PARAM.in.awsom_gpu
+    - PARAM.in.awsom.eclipse2024
+    - PARAM.in.test.SCIH_streamaligned
+
+- id: awsom_anisopi_cme
+  description: >-
+    AWSoM AnisoPi CME eruption. Time-accurate SC+IH with flux rope insertion
+    (#CME). Two-PARAM split: background + eruption.
+  model: AwsomAnisoPi
+  components: [SC, IH]
+  has_CME: true
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints: [PARAM.in.awsom.CME, PARAM.in.awsom.CME_gpu]
+
+- id: awsomr_steady
+  description: >-
+    AWSoM-R (u=AwsomR, e=Awsom) with field-line-thread inner boundary,
+    steady-state SC+IH coupled background.
+  model: AwsomR
+  components: [SC, IH]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: true
+  match_hints:
+    - PARAM.in.awsomr
+    - PARAM.in.test.SCIH_threadbc
+    - PARAM.in.realtime.SCIH_threadbc
+
+- id: awsomr_cme
+  description: >-
+    AWSoM-R with field-line-thread BC, CME eruption.
+  model: AwsomR
+  components: [SC, IH]
+  has_CME: true
+  has_MFLAMPA: false
+  has_threaded_gap: true
+  match_hints: [PARAM.in.awsomr.CME]
+
+- id: awsom_sc_only_legacy
+  description: >-
+    Single-temperature AWSoM (u=Awsom, e=Awsom), SC-only. Lightweight teaching
+    template; less commonly used in production papers.
+  model: Awsom
+  components: [SC]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints: [PARAM.in.awsom.STITCH]
+
+- id: sofie_steady
+  description: >-
+    SOFIE (u=Awsom, e=AwsomSA) with field-line threads, steady-state SC+IH+SP.
+    Inner boundary at 1.1 Rs. SP component carries MFLAMPA infrastructure even
+    in the steady-state variant.
+  model: AwsomSA
+  components: [SC, IH, SP]
+  has_CME: false
+  has_MFLAMPA: true
+  has_threaded_gap: true
+  match_hints: [PARAM.in.sofie, PARAM.in.sofie.CCMC]
+
+- id: sofie_cme
+  description: SOFIE with CME eruption (no MFLAMPA SEP transport).
+  model: AwsomSA
+  components: [SC, IH]
+  has_CME: true
+  has_MFLAMPA: false
+  has_threaded_gap: true
+  match_hints: [PARAM.in.sofie.CME]
+
+- id: sofie_mflampa_cme
+  description: >-
+    SOFIE + MFLAMPA SEP transport, CME eruption. SC+IH+SP components,
+    field-line registry, MFLAMPA coupling.
+  model: AwsomSA
+  components: [SC, IH, SP]
+  has_CME: true
+  has_MFLAMPA: true
+  has_threaded_gap: true
+  match_hints: [PARAM.in.sofie.MFLAMPA]
+
+# Solar / heliospheric extras
+
+- id: ee_corona
+  description: Eruption Energy (EE) coronal-active-region cases. EE-only or EE+SC.
+  components: [EE]
+  has_CME: false
+  has_MFLAMPA: false
+  match_hints: [PARAM.in.test.EE]
+
+- id: outer_helio
+  description: Outer heliosphere (OH/PT) cases with neutral/plasma populations.
+  model: OuterHelio
+  components: [OH]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints: [PARAM.in.test.OH, outerhelio]
+
+# Geospace (placeholder; expand once geospace gold cases are added)
+
+- id: geospace_gm_only
+  description: GM-only geospace simulation.
+  model: Geospace
+  components: [GM]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints: [PARAM.in.test.GM]
+
+- id: geospace_gm_ie_im
+  description: Geospace coupled GM+IE+IM (full inner magnetosphere).
+  model: Geospace
+  components: [GM, IE, IM]
+  has_CME: false
+  has_MFLAMPA: false
+  has_threaded_gap: false
+  match_hints: [PARAM.in.test.GMPC]

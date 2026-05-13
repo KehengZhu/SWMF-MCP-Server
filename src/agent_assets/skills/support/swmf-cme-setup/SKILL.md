@@ -52,7 +52,7 @@ Not in scope: PARAM validation (defer to `swmf-params`); magnetogram input handl
    ```
 5. Direct reads only of files named by evidence
    (`SWMFSOLAR/Param/PARAM.in.awsomr.CME`,
-   `SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in`,
+   `SWMFSOLAR/Param/PARAM.in.awsom.CME`,
    `examples/CCMC_run_weihao/Weihao_Liu_011326_SH_1_PARAM.expand.{start,restart}`).
 
 ## Authority Order

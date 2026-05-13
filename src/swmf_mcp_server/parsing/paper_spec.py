@@ -6,11 +6,20 @@ in the JSON/YAML. No PDF parsing happens here (see plan §9.2 anti-pattern
 "MCP-as-PDF-parser").
 
 The shape mirrors `ccmc_spec` (so the downstream skill can merge both paths)
-plus two paper-only fields:
+plus paper-only fields:
 
 * `source_paper_path`  — path to the source paper artifact (PDF, preprint, etc.).
 * `confidence_per_field` — agent-supplied confidence map (string or numeric); MCP
   records it verbatim and does not adjudicate.
+* `precedent_hint` — list of strings. The LLM extracts paper-cited prior runs
+  (e.g. "we use the setup of Sokolov et al. 2021 with modifications X, Y"). When
+  non-empty, the downstream skill ranks hinted precedents above the
+  archetype-default secondary precedents (cf. capability_enrichment_plan.md §5.4).
+* `numerics_phrases` — list of strings. Verbatim phrases from the paper that
+  trigger derivation/default lookups (e.g. "Spitzer heat conduction with
+  collisionless flux beyond 5 R_s"). The skill uses these to decide which
+  equation-set or mined required-command blocks must appear in the emitted
+  PARAM (cf. capability_enrichment_plan.md §5.3 two-source join).
 """
 from __future__ import annotations
 
@@ -43,6 +52,9 @@ _CCMC_SHAPE_KEYS = (
 _DICT_KEYS = {"fr_params", "cone_params", "cme_params", "mflampa_params", "metadata"}
 _LIST_KEYS = {"input_files_listed", "output_files_listed", "quicklook_targets"}
 
+# Paper-only list fields beyond the ccmc_spec shape. Empty list is the default.
+_PAPER_LIST_KEYS = ("precedent_hint", "numerics_phrases")
+
 
 def _empty_paper_spec() -> dict[str, Any]:
     out: dict[str, Any] = {key: None for key in _CCMC_SHAPE_KEYS}
@@ -52,6 +64,8 @@ def _empty_paper_spec() -> dict[str, Any]:
         out[key] = []
     out["source_paper_path"] = None
     out["confidence_per_field"] = {}
+    for key in _PAPER_LIST_KEYS:
+        out[key] = []
     out["missing_fields"] = []
     out["unparsed_keys"] = []
     return out
@@ -107,13 +121,26 @@ def _normalize_loaded(raw: Any) -> tuple[dict[str, Any], list[str], list[str]]:
                 f"Field 'confidence_per_field' must be a mapping; got {type(confidence).__name__}."
             )
 
+    for key in _PAPER_LIST_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if isinstance(value, list):
+            parsed[key] = [str(item) for item in value]
+        elif value is None:
+            parsed[key] = []
+        else:
+            parse_errors.append(
+                f"Field '{key}' must be a list; got {type(value).__name__}."
+            )
+
     missing = [
         key for key in _CCMC_SHAPE_KEYS
         if (parsed[key] in (None, {}, []) and key not in raw)
     ]
     parsed["missing_fields"] = missing
 
-    known = set(_CCMC_SHAPE_KEYS) | {"source_paper_path", "confidence_per_field"}
+    known = set(_CCMC_SHAPE_KEYS) | {"source_paper_path", "confidence_per_field"} | set(_PAPER_LIST_KEYS)
     parsed["unparsed_keys"] = sorted(k for k in raw.keys() if k not in known)
 
     return parsed, missing, parse_errors

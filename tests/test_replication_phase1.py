@@ -186,13 +186,17 @@ class TestCheckRules:
         assert "cme_requires_timeaccurate" in block_ids
         _assert_no_advice_leak(result)
 
-    def test_check_rules_clean_on_real_prior_run_param(self) -> None:
-        prior = (
-            _repo_root().parent / "SWMFSOLAR" / "Run_Max_RP_CME3" / "run01" / "PARAM.in"
+    def test_check_rules_clean_on_shipped_awsom_template(self) -> None:
+        """A shipped, well-formed AWSoM PARAM should produce zero block-severity
+        rule violations. This is the policy-shaped successor of the old test
+        that pointed at SWMFSOLAR/Run_*/ (out of corpus, see
+        capability_enrichment_plan.md §4.1)."""
+        shipped = (
+            _repo_root().parent / "SWMFSOLAR" / "Param" / "PARAM.in.awsom"
         )
-        if not prior.is_file():
-            pytest.skip(f"Prior run PARAM not present at {prior}")
-        result = self._call(str(prior), check_rules=True)
+        if not shipped.is_file():
+            pytest.skip(f"Shipped AWSoM template not present at {shipped}")
+        result = self._call(str(shipped), check_rules=True)
         rule_finding = next(f for f in result["findings"] if f["kind"] == "rule_violations")
         summary = rule_finding["rule_check_summary"]
         assert summary["block"] == 0

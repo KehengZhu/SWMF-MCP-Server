@@ -1,7 +1,8 @@
 # awsom_cme_eruption — case recipe
 
 Multi-session skeleton for an AWSoM (or AWSoM-R) CME run with SC + IH coupling, no SP.
-Derived from `SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in` and `SWMFSOLAR/Param/PARAM.in.awsomr.CME`.
+Derived from the shipped templates `SWMFSOLAR/Param/PARAM.in.awsomr.CME` and
+`SWMFSOLAR/Param/PARAM.in.awsom.CME`.
 
 The recipe is **structure**, not values. Numbers are template- or spec-supplied; this
 document specifies which command goes in which session, where session boundaries fall,
@@ -92,8 +93,9 @@ Both PARAMs include the same `#STARTTIME`, `#HARMONICSFILE`, `#HARMONICSGRID`,
 * `#AMRREGION coneIH_CME` rotation — `derivations/geometric.yaml::coneih_rotation_from_fr`.
 * Lookup tables (`RadCoolCorona`, `TR`, `los_tbl`, etc.) — copied from template verbatim.
 
-## Anchored from prior run
+## Anchored on shipped templates
 
-`SWMFSOLAR/Run_Max_RP_CME3/run01/PARAM.in` — the AWSoM-R CME variant of this archetype with
-ROTATEHGR/ROTATEHGI disabled. Use as the closest precedent until a richer template is
-authored.
+`SWMFSOLAR/Param/PARAM.in.awsomr.CME` is the canonical AWSoM-R CME exemplar for this
+archetype; `SWMFSOLAR/Param/PARAM.in.awsom.CME` is the AWSoM-AnisoPi variant. The
+authoring ladder diffs the emerging PARAM against both via the
+`secondary_precedents` slot in `templates/awsom_cme.yaml`.

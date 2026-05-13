@@ -11,7 +11,7 @@
     "#CPUTIMEMAX.CpuTimeMax": "44 h"
   assumptions:
     - "44 h matches Frontera/Pleiades 48 h queue limits with safety margin; reduce on shorter queues."
-  evidence: "CCMC operational default; SWMFSOLAR Run_Max_RP_CME3/run01."
+  evidence: "CCMC operational default."
 
 - id: minimum_pressure_default
   applies_when:

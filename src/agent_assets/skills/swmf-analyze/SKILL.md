@@ -53,7 +53,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
    - for `run_dir`, use `run_dir_layout`, `postproc_state`,
      `component_artifact_inventory`, `restart_inventory`, and
      `component_output_artifacts` before reading raw artifacts
-   - prefer an existing extracted run directory over an archive when both are present; for `Run_Max_RP_CME3`, use `SWMFSOLAR/Run_Max_RP_CME3/run01` and treat `Run_Max_RP_CME3.tar.gz` only as a fallback/source archive
+   - prefer an existing extracted run directory over an archive when both are present; treat a tarball alongside an extracted run as a fallback/source archive only
    - never open or parse `.out`, `.outs`, `.idl`, `.sav`, `.tec`, `.dat`, or
      other SWMF output files with common command-line tools (`cat`, `head`,
      `tail`, `grep`, Python binary readers, ad hoc parsers); use SWMF/IDL

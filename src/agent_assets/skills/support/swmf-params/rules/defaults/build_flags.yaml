@@ -25,7 +25,7 @@
 - id: awsom_cme_eruption_layout
   case_archetype: awsom_cme_eruption
   config_pl: "Config.pl -v=Empty,SC/BATSRUS,IH/BATSRUS"
-  evidence: "PARAM.in.awsomr.CME header; SWMFSOLAR/Run_Max_RP_CME3/run01."
+  evidence: "PARAM.in.awsomr.CME header (SWMFSOLAR/Param/)."
 
 - id: awsom_cme_eruption_sc
   case_archetype: awsom_cme_eruption

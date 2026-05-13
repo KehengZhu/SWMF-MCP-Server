@@ -12,7 +12,7 @@ contract: `intent="paper"`, `intent="structured_spec"`, `intent="prior_run"`.
 
 * "Run this paper's case from scratch."
 * "Replicate this CCMC run locally."
-* "Reproduce `Run_Max_RP_CME3/run01` on Frontera."
+* "Reproduce my prior run directory on Frontera."
 * "Build a new run for the 2023-02-24 CME like this paper says."
 
 ## Do not use when
@@ -50,17 +50,40 @@ If any of these is missing the skill asks the user once; it does not invent.
      archetype detection, same template/recipe/derivation/default ladder, same
      launch gate.
 2. **Archetype detection.** From the normalized spec compute the case archetype tuple
-   `(model, components, has_CME, has_MFLAMPA, has_threaded_gap)`. Common results:
-   * `awsom_cme_eruption` — AWSoM/AWSoM-R + CME, no SP. Anchored on
-     `SWMFSOLAR/Run_Max_RP_CME3/run01`.
-   * `sofie_mflampa_cme` — AWSoM-R + SaMhd + CME + MFLAMPA SP. Anchored on
-     `examples/CCMC_run_weihao/`.
+   `(model, components, has_CME, has_MFLAMPA, has_threaded_gap)` and match it against
+   `support/swmf-params/rules/archetypes.yaml`. The LLM matches paper text or the
+   `structured_spec` summary against the `description` field of each entry. The
+   archetype `id` (`awsom_anisopi_cme`, `sofie_mflampa_cme`, …) drives every
+   downstream lookup (templates, recipes, mined defaults). Falling back to a tuple
+   match is the recovery path when the spec is thin.
 3. **Template discovery.** Load
    `support/swmf-params/rules/templates/<archetype>.yaml`. The manifest carries
    `start_template`, `restart_template`, `required_flag_overrides`, `recipe`, and
-   `secondary_precedents`. If no manifest exists, fall back to
+   `secondary_precedents` — all paths resolve under the **shipped** SWMF /
+   SWMFSOLAR source tree (`SWMF/Param/`, `SWMFSOLAR/Param/`); personal study run
+   directories under `SWMFSOLAR/Run_*/` are out of scope and must not appear in
+   any manifest. If no manifest exists, fall back to
    `get_evidence(query="<archetype> PARAM template", task_type="configuration", goal="PARAM template selection")`
    and tag `template_choice.provenance="inferred"`.
+3a. **Corpus diff (mandatory).** After selecting the templates in step 3, load
+   `support/swmf-params/rules/defaults/mined/<archetype>_required.yaml` (the mined
+   intersection across the corpus) and
+   `support/swmf-params/rules/defaults/mined/equation_set_required.yaml` (the
+   equation-module → required-command mapping; look up the value of
+   `Config.pl -o=…:e=<Name>`). The union of those two sets is the
+   **command floor** for this archetype. Diff the emerging PARAM draft against:
+
+   * the command floor (mined `_required.yaml` ∪ equation-set requirements),
+   * every entry in `secondary_precedents` from the template manifest,
+   * every entry in `paper_spec.precedent_hint` (paper-cited prior runs;
+     ranked above the manifest-default precedents).
+
+   Any command present in the floor or in *all* precedent-PARAMs but absent
+   from the draft is a **blocking violation** — surface it to the user as a
+   `gap`, never silently fill. This is the rule that would have caught the
+   eclipse2024 missing-physics gap. Paper-supplied `numerics_phrases` should
+   trigger lookup in `support/swmf-params/rules/derivations/` for any explicit
+   command-block translations the corpus alone doesn't supply.
 4. **Magnetogram and harmonics evidence.**
    * `inspect_artifact(artifact_type="magnetogram", path=<fits|map>)` when a file is
      named or downloaded. The inspector reports format, map_type, CR, observation_time,
