@@ -1,0 +1,11 @@
+# Held-out papers — not used as a source for new rule proposals.
+#
+# Policy: a paper exits holdout after the agent scores composite-clean
+# on it (A pass, no C-physics/numerical/boundary misses, no D structural
+# mismatches) on TWO CONSECUTIVE cycles. Then it joins the train set
+# and a new paper is added here.
+#
+# One paper name per non-comment line (matches a directory under eval/papers/).
+# Empty (apart from comments) = no holdout configured yet; the loop will
+# warn but not block.
+

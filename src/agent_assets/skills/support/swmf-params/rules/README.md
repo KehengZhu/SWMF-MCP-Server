@@ -76,6 +76,48 @@ Each YAML file is append-only extendable: drop a new entry, no code change.
 * New operational default → append to `defaults/<topic>.yaml`.
 * New template-pair manifest → drop a YAML in `templates/`.
 
+### Provenance on new entries (from `swmf-improve`)
+
+Rules added by the `swmf-improve` meta-agent carry a `provenance` block:
+
+```yaml
+provenance:
+  type: mined | derivation | paper_spec | wiring | skill_text | expert
+  source: <absolute file path or DOI>
+  cite: <line range or page+quote>
+  added_by: swmf-improve
+  added_on: <YYYY-MM-DD>
+```
+
+The `source` field must **not** resolve under any
+`eval/papers/*/reference/` directory. This is the contamination
+tripwire: rules must derive from shipped SWMF/SWMFSOLAR source, paper
+text, archetype catalog, mined corpus YAMLs, or expert testimony — not
+from the gold-answer PARAMs the eval set uses as ground truth.
+
+Hand-authored entries without a `provenance` block continue to be valid
+(many predate this convention). New entries added by the meta-agent
+must include one.
+
+### Seven-lane root-cause taxonomy (used by `swmf-improve` Stage 3)
+
+When a replication attempt misses a command or sets a wrong value, the
+meta-agent classifies the gap into one of these lanes before deciding
+how (or whether) to fix it:
+
+| Lane | Fix lands in | Auto-fix? |
+|---|---|---|
+| **wiring** | matcher / skill text patch | ✅ |
+| **corpus-derivable** | `defaults/mined/<archetype>_required.yaml` (via miner re-run) | ✅ |
+| **source-derivable** | `derivations/<topic>.yaml` (cite BATSRUS file:line) | ✅ |
+| **paper-extractable** | extractor prompt or `paper_spec` schema | ✅ |
+| **style-alternative** | skill text — surface in `inferred \| assumed` | ✅ |
+| **expert-knowledge** | `defaults/<topic>.yaml` with `provenance.type = expert` (only after operator conversation) | ❌ auto |
+| **reference-only** | nothing — flag for human review | ❌ |
+
+Full taxonomy lives in `src/agent_assets/skills/swmf-improve/SKILL.md`
+Stage 3.
+
 Schema changes to predicate vocabulary or expression operators are API changes and require
 MCP/skill code updates.
 
