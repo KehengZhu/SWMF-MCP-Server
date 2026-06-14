@@ -255,12 +255,14 @@ class TestAnyOfPredicate:
 
 
 def test_phase2_rules_present() -> None:
+    # Reshaped in Option-2 refactor: defaults/*.yaml folded into case_recipes
+    # and templates/*.yaml replaced by templates/INDEX.md.
     assert _rules_path("case_recipes", "sofie_mflampa_cme.md").is_file()
-    assert _rules_path("templates", "sofie_mflampa_cme.yaml").is_file()
     assert _rules_path("derivations", "spheromak_shape.yaml").is_file()
-    assert _rules_path("defaults", "cme_eruption.yaml").is_file()
-    assert _rules_path("defaults", "session_ladders.yaml").is_file()
-    assert _rules_path("defaults", "build_flags.yaml").is_file()
+    assert _rules_path("templates", "INDEX.md").is_file()
+    assert _rules_path("templates", "discovery.md").is_file()
+    assert _rules_path("crosswalks", "heating.yaml").is_file()
+    assert _rules_path("crosswalks", "grids_amr.yaml").is_file()
 
 
 def test_geometric_derivations_extended() -> None:
@@ -291,14 +293,13 @@ def test_sofie_mflampa_recipe_documents_two_param_split() -> None:
         assert needle in text
 
 
-def test_sofie_template_manifest_references_recipe_and_examples() -> None:
-    text = _rules_path("templates", "sofie_mflampa_cme.yaml").read_text(encoding="utf-8")
+def test_sofie_template_index_references_shipped_param_set() -> None:
+    # In Option-2 the template YAMLs are gone; INDEX.md points at *sets* of
+    # shipped PARAMs (not forked copies).
+    text = _rules_path("templates", "INDEX.md").read_text(encoding="utf-8")
     for needle in (
-        "case_archetype: sofie_mflampa_cme",
-        "PARAM.in.sofie.CCMC",
-        "PARAM.in.sofie.MFLAMPA",
-        "case_recipes/sofie_mflampa_cme.md",
-        "examples/CCMC_run_weihao",
+        "sofie_mflampa_cme",
+        "PARAM.sofie",
     ):
         assert needle in text
 
@@ -311,7 +312,7 @@ def test_sofie_template_manifest_references_recipe_and_examples() -> None:
 def test_swmf_magnetogram_skill_full() -> None:
     text = _skill_path("support", "swmf-magnetogram", "SKILL.md").read_text(encoding="utf-8")
     for needle in (
-        'artifact_type = "magnetogram"',
+        "--type magnetogram",
         "carrington_rotation",
         "GONG",
         "ADAPT",

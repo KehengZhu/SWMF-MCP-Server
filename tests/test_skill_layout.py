@@ -22,6 +22,7 @@ _ENTRY_SKILLS = [
     "swmf-configure",
     "swmf-debug",
     "swmf-explain",
+    "swmf-improve",
     "swmf-replicate",
     "swmf-run",
 ]
@@ -68,9 +69,9 @@ def test_shared_core_playbook_exists() -> None:
 
     core_text = core_playbook.read_text(encoding="utf-8")
     # v2 redesign: check for the new structure
-    assert "V2 MCP tool surface" in core_text
-    assert "inspect_artifact" in core_text
-    assert "get_evidence" in core_text
+    assert "Local CLI surface" in core_text
+    assert "swmf inspect" in core_text
+    assert "swmf get-evidence" in core_text
     assert "Runlog discipline" in core_text
     assert "Do not directly read a whole `runlog*`" in core_text
 
@@ -107,7 +108,7 @@ def test_idl_animation_playbook_documents_out_to_outs_workflow() -> None:
     assert "filename='z=0_var_3.outs'" in playbook_text
     assert "func='u bx;by'" in playbook_text
     assert "animate_data" in playbook_text
-    assert 'get_evidence(query="animate_data"' in playbook_text
+    assert 'swmf get-evidence --query "animate_data"' in playbook_text
     assert "single-snapshot" in playbook_text
     assert "multi-snapshot" in playbook_text
     assert "prefer an existing extracted run directory over an archive" in analyze_text.lower() or \
@@ -120,13 +121,13 @@ def test_run_dir_postprocessing_skills_require_inspection_first() -> None:
     postproc_text = (_skills_root() / "support" / "swmf-postproc" / "SKILL.md").read_text(encoding="utf-8")
 
     for text in (analyze_text, postproc_text):
-        assert 'inspect_artifact(artifact_type="run_dir"' in text
+        assert 'swmf inspect --type run_dir' in text
         assert "run_dir_layout" in text
         assert "postproc_state" in text
         assert "component_artifact_inventory" in text
         assert "restart_inventory" in text
         assert "component_output_artifacts" in text
-        assert 'inspect_artifact(artifact_type="runlog"' in text
+        assert 'swmf inspect --type runlog' in text
         assert "common command-line tools" in text
         assert "Do not directly read runlogs" in text or "do not directly read whole runlogs" in text
 
@@ -144,7 +145,7 @@ def test_postproc_skill_documents_script_launch_directory() -> None:
         "Both `PostProc.pl` and `Restart.pl` are copied into an SWMF run directory",
         "executed from that run directory",
         "Do not run either script\nfrom `RESULTS/<name>/`, a component directory, the SWMF source tree, or\n`share/Scripts`",
-        'Call `inspect_artifact(artifact_type="run_dir", path=<path>)`',
+        'Run `swmf inspect --type run_dir --path <path>`',
         "If the inspected path is `postprocessed_results_tree`, `restart_tree`, or\n   `component_dir`, do not treat it as the command cwd",
         "Prefer the run-local copied scripts: `./PostProc.pl` and `./Restart.pl`",
         "`cd <run_dir> && ./PostProc.pl`",

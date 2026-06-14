@@ -65,6 +65,7 @@ class ReferenceService:
     def _build_catalog(self, swmf_root: Path, resolution_notes: list[str] | None = None) -> SourceCatalog:
         xml_paths = sorted(swmf_root.rglob("PARAM.XML"))
         commands: dict[str, list[CommandMetadata]] = {}
+        commandgroup_to_commands: dict[str, list[str]] = {}
 
         for xml_path in xml_paths:
             component: str | None = None
@@ -79,6 +80,23 @@ class ReferenceService:
 
             for entry in parse_param_xml_file(xml_path, component=component):
                 commands.setdefault(entry.normalized, []).append(entry)
+                if entry.commandgroup:
+                    # Key as "{COMPONENT}:{groupname_upper}" so SC's "PHYSICS PARAMETERS"
+                    # doesn't collide with IH's same-named group.
+                    comp_key = (component or "TOP").upper()
+                    group_key = f"{comp_key}:{entry.commandgroup.strip().upper()}"
+                    commandgroup_to_commands.setdefault(group_key, []).append(entry.normalized)
+
+        # Deduplicate command lists per commandgroup while preserving insertion order.
+        for key, values in commandgroup_to_commands.items():
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for value in values:
+                if value in seen:
+                    continue
+                seen.add(value)
+                deduped.append(value)
+            commandgroup_to_commands[key] = deduped
 
         components = discover_component_versions(swmf_root, xml_paths)
         templates = discover_example_params(swmf_root)
@@ -99,6 +117,7 @@ class ReferenceService:
             source_files=source_files,
             idl_procedures=idl_procedures,
             resolution_notes=resolution_notes or [],
+            commandgroup_to_commands=commandgroup_to_commands,
         )
 
     def get_catalog(

@@ -4,9 +4,7 @@ The real service now lives in ``swmf_mcp_server.knowledge.service``.
 New code should import from the knowledge package directly.
 """
 from ..knowledge.service import (
-    SEARCH_MODE_HYBRID,
     SEARCH_MODE_KEYWORD,
-    SEARCH_MODE_SEMANTIC,
     SLICE_ANALYST_CONTEXT,
     SLICE_SWMFSOLAR_SOURCE,
     _EXTRA_ROOTS_KEY_BY_ROOT,
@@ -28,9 +26,7 @@ from ..knowledge.service import (
 )
 
 __all__ = [
-    "SEARCH_MODE_HYBRID",
     "SEARCH_MODE_KEYWORD",
-    "SEARCH_MODE_SEMANTIC",
     "SLICE_ANALYST_CONTEXT",
     "SLICE_SWMFSOLAR_SOURCE",
     "_EXTRA_ROOTS_KEY_BY_ROOT",

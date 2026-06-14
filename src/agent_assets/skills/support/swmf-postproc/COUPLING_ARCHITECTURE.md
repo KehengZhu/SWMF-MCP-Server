@@ -8,18 +8,18 @@ Use this playbook for:
 
 ## Allowed First Tool
 First tool:
-- `get_context(question=<coupling question>, task_type="architecture")`
+- `swmf get-context --question "<coupling question>" --task-type architecture`
 
 Precision follow-up when registry detail is needed:
-- `get_evidence(mode="keyword", goal="coupling registry detail")`
+- `swmf get-evidence --mode keyword --goal "coupling registry detail"`
 
 Do not begin broad coupling questions with build/run readiness tools or heuristic source search.
 
 ## Evidence Order
-1. `get_context` (returns coupling entities and evidence)
-2. `get_evidence(mode="keyword", goal="coupling registry detail")` if entity-level
+1. `swmf get-context` (returns coupling entities and evidence)
+2. `swmf get-evidence --mode keyword --goal "coupling registry detail"` if entity-level
    registry detail is needed
-3. Direct source reads only when the v2 payload names a specific file and still
+3. Direct source reads only when the swmf CLI payload names a specific file and still
    leaves a material gap
 4. Heuristic source evidence only for additive context
 

@@ -33,32 +33,25 @@ Not in scope: PARAM validation, build orchestration, runtime debugging.
 
 For one named jobscript:
 
-```
-inspect_artifact(
-  artifact_type = "jobscript",
-  path = <jobscript_path>
-)
+```bash
+swmf inspect --type jobscript --path <jobscript_path>
 ```
 
 For discovering candidate templates by cluster:
 
-```
-get_evidence(
-  query = "job script <cluster>",
-  task_type = "run",
-  goal = "cluster submission template"
-)
+```bash
+swmf get-evidence --query "job script <cluster>" --task-type run --goal "cluster submission template"
 ```
 
-The skill calls inspect first and `get_evidence` only when no candidate is named.
+The skill calls inspect first and `swmf get-evidence` only when no candidate is named.
 
 ## Authority Order
 
-1. `inspect_artifact(artifact_type="jobscript")` — deterministic parse of the file.
-2. `get_evidence(task_type="run")` — discovery of templates and conventions.
+1. `swmf inspect --type jobscript` — deterministic parse of the file.
+2. `swmf get-evidence --task-type run` — discovery of templates and conventions.
 3. `swmf-swmfsolar` (Phase 2) — for canonical Makefile/JobScripts dependencies.
 
-Never let `get_evidence` override `inspect_artifact` for a file the user actually has.
+Never let `swmf get-evidence` override `swmf inspect` for a file the user actually has.
 
 ## Output Contract
 
@@ -71,7 +64,7 @@ Never let `get_evidence` override `inspect_artifact` for a file the user actuall
 * `swmf_invoked`, `fdips_invoked`, `harmonics_invoked`, `postproc_present` — booleans.
 * `substitution_tokens` — placeholder names the user must replace before submitting.
 * `evidence_paths` — the inspected file plus any evidence items returned by
-  `get_evidence` calls.
+  `swmf get-evidence` calls.
 * `verified_claims` vs `unverified_claims`.
 
 ## Cluster cheatsheet (evidence pointers, not advice)

@@ -19,11 +19,11 @@ description: "Use when the task is about compiling, setting up build targets, bu
 
 ## Evidence order
 
-1. `get_evidence(query=<build goal>, task_type="build", goal=<build goal>)`
+1. `swmf get-evidence --query <build goal> --task-type build --goal "<build goal>"`
    — discovers Config.pl, Makefile targets, and build entrypoints
-2. `inspect_artifact(artifact_type="run_dir"|"build_output", path=...)`
+2. `swmf inspect --type run_dir|build_output --path ...`
    — for build output inspection or troubleshooting
-3. `get_evidence(mode="keyword", goal="build flags or component selection")`
+3. `swmf get-evidence --mode keyword --goal "build flags or component selection"`
    — for specific build options or component lookup
 
 ## Helper skills allowed
@@ -36,10 +36,10 @@ description: "Use when the task is about compiling, setting up build targets, bu
 
 ## Outputs
 
-* workflow evidence items from `get_evidence(task_type="build")`
+* workflow evidence items from `swmf get-evidence --task-type build`
 * workflow metadata on returned items:
   * `metadata.kind`
   * `metadata.relative_path`
   * `metadata.why_relevant`
-* build findings when troubleshooting (from `inspect_artifact`)
+* build findings when troubleshooting (from `swmf inspect`)
 * next step clearly stated (what command to run and why)

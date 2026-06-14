@@ -26,25 +26,25 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
 ## Evidence order
 
 1. For PARAM command meaning:
-   ```
-   get_evidence(query=<param_command>, mode="keyword", goal="param definition")
+   ```bash
+   swmf get-evidence --query <param_command> --mode keyword --goal "param definition"
    ```
 2. For structural primitives (rule evaluation, include resolution, component map,
    external-ref resolution) on a PARAM.in:
-   ```
-   inspect_artifact(artifact_type="param", path=<PARAM.in_path>, check_rules=True)
+   ```bash
+   swmf inspect --type param --path <PARAM.in_path> --check-rules
    ```
    For PARAM intent (sessions, control cadence, `#SAVEPLOT` meaning), read the
    PARAM.in file directly. The inspector returns structural primitives only.
 3. For configuration scripts or `Config.pl` discovery:
-   ```
-   get_evidence(query=<config goal>, goal=<config goal>, module=<component>, task_type="configuration")
+   ```bash
+   swmf get-evidence --query <config goal> --goal "<config goal>" --module <component> --task-type configuration
    ```
 4. For runtime schema vs source divergence:
+   ```bash
+   swmf get-evidence --query <param_command> --mode keyword --goal "runtime source behavior"
    ```
-   get_evidence(query=<param_command>, mode="hybrid", goal="runtime source behavior")
-   ```
-5. Authoritative validation: run `Scripts/TestParam.pl` directly from the SWMF root (not via MCP)
+5. Authoritative validation: run `Scripts/TestParam.pl` directly from the SWMF root (not via the swmf CLI)
 
 ## Helper skills allowed
 
@@ -59,7 +59,7 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
 
 * PARAM command meaning cited from `PARAM.XML` or evidence
 * structural validation findings (if a PARAM.in was provided)
-* configuration workflow evidence from `get_evidence(task_type="configuration")`
+* configuration workflow evidence from `swmf get-evidence --task-type configuration`
 * workflow metadata on returned items:
   * `metadata.kind`
   * `metadata.relative_path`

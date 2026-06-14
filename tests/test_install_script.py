@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import socket
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -24,10 +22,6 @@ def _load_install_script():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _can_resolve_pypi() -> bool:
@@ -72,10 +66,10 @@ def _install_for_agent(
     return module, target_dir, swmf_root, swmfsolar_root
 
 
-def test_build_server_env_omits_optional_keys_when_not_passed(tmp_path: Path) -> None:
+def test_build_cli_env_omits_optional_keys_when_not_passed(tmp_path: Path) -> None:
     module = _load_install_script()
 
-    env = module.build_server_env(
+    env = module.build_cli_env(
         swmf_root=(tmp_path / "SWMF").resolve(),
         swmf_idl_exec="",
         swmfsolar_root=None,
@@ -146,101 +140,51 @@ def test_resolve_swmfsolar_root_uses_search_order(tmp_path: Path) -> None:
     assert note == "sibling of SWMF_ROOT"
 
 
-@pytest.mark.parametrize(
-    ("agent", "config_path"),
-    [
-        ("claude", lambda target: target / ".mcp.json"),
-        ("copilot-vscode", lambda target: target / ".vscode" / "mcp.json"),
-        ("copilot-cli", lambda target: target / ".mcp.json"),
-        ("codex", lambda target: target / ".codex" / "config.toml"),
-    ],
-)
-def test_install_script_writes_only_requested_agent_outputs_and_agent_asset_symlinks(
+@pytest.mark.parametrize("agent", ["claude", "copilot-vscode", "copilot-cli", "codex"])
+def test_install_writes_launcher_instruction_and_skills(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     agent: str,
-    config_path,
 ) -> None:
     module, target_dir, swmf_root, swmfsolar_root = _install_for_agent(monkeypatch, tmp_path, agent)
-    expected_env = {
-        "SWMF_ROOT": str(swmf_root.resolve()),
-        "SWMF_IDL_EXEC": "/Applications/NV5/idl92/bin/idl",
-        "SWMFSOLAR_ROOT": str(swmfsolar_root.resolve()),
-    }
-    expected_cwd = str((target_dir / ".swmf_mcp_server").resolve())
-    config_file = config_path(target_dir)
+
+    launcher_path = target_dir / ".swmf_ai" / "swmf"
     skills_path = module.skill_destination_for_agent(agent, target_dir)
     instruction_path = module.instruction_destination_for_agent(agent, target_dir)
     source_skills = _repo_root() / "src" / "agent_assets" / "skills"
-    source_instruction = _repo_root() / "src" / "agent_assets" / "SWMF_CORE_DISCIPLINE.md"
 
-    assert config_file.exists()
+    # 1. Self-contained launcher with SWMF_ROOT (and friends) baked in.
+    assert launcher_path.exists()
+    assert launcher_path.stat().st_mode & 0o111, "launcher must be executable"
+    launcher = launcher_path.read_text(encoding="utf-8")
+    assert f"export SWMF_ROOT='{swmf_root.resolve()}'" in launcher
+    assert f"export SWMFSOLAR_ROOT='{swmfsolar_root.resolve()}'" in launcher
+    assert "export SWMF_IDL_EXEC='/Applications/NV5/idl92/bin/idl'" in launcher
+    # The console script sits next to the configured venv interpreter.
+    assert "exec '/tmp/.venv/bin/swmf' \"$@\"" in launcher
+
+    # 2. Instruction file is GENERATED (not a symlink) = header + discipline.
     assert instruction_path.exists()
-    assert skills_path.exists()
-    assert instruction_path.is_symlink()
-    assert instruction_path.resolve() == source_instruction.resolve()
-    assert skills_path.is_symlink() or skills_path.resolve() == source_skills.resolve()
+    assert not instruction_path.is_symlink()
+    instruction = instruction_path.read_text(encoding="utf-8")
+    assert str(launcher_path) in instruction
+    assert "# SWMF Core Discipline" in instruction
+    assert f"SWMF_ROOT={swmf_root.resolve()}" in instruction
+
+    # 3. Skill tree is symlinked.
+    assert skills_path.is_symlink()
     assert skills_path.resolve() == source_skills.resolve()
 
-    if agent == "claude":
-        assert _read_json(config_file) == {
-            "mcpServers": {
-                "swmf-prototype": {
-                    "command": "/tmp/.venv/bin/python",
-                    "args": ["-m", "swmf_mcp_server.server"],
-                    "env": expected_env,
-                }
-            }
-        }
-    elif agent == "copilot-vscode":
-        assert _read_json(config_file) == {
-            "servers": {
-                "swmf-prototype": {
-                    "type": "stdio",
-                    "command": "/tmp/.venv/bin/python",
-                    "args": ["-m", "swmf_mcp_server.server"],
-                    "cwd": expected_cwd,
-                    "env": expected_env,
-                }
-            }
-        }
-    elif agent == "copilot-cli":
-        assert _read_json(config_file) == {
-            "mcpServers": {
-                "swmf-prototype": {
-                    "type": "stdio",
-                    "command": "/tmp/.venv/bin/python",
-                    "args": ["-m", "swmf_mcp_server.server"],
-                    "cwd": expected_cwd,
-                    "env": expected_env,
-                    "tools": ["*"],
-                }
-            }
-        }
-    elif agent == "codex":
-        assert tomllib.loads(config_file.read_text(encoding="utf-8")) == {
-            "mcp_servers": {
-                "swmf-prototype": {
-                    "command": "/tmp/.venv/bin/python",
-                    "args": ["-m", "swmf_mcp_server.server"],
-                    "cwd": expected_cwd,
-                    "env": expected_env,
-                }
-            }
-        }
-
-    unexpected_configs = [
+    # 4. No MCP config surfaces are written anymore.
+    for stale in (
         target_dir / ".mcp.json",
         target_dir / ".vscode" / "mcp.json",
-        target_dir / ".github" / "mcp.json",
         target_dir / ".codex" / "config.toml",
-    ]
-    unexpected_configs.remove(config_file)
-    for unexpected in unexpected_configs:
-        assert not unexpected.exists(), f"Unexpected config written for {agent}: {unexpected}"
+    ):
+        assert not stale.exists(), f"Unexpected MCP config written for {agent}: {stale}"
 
 
-def test_install_script_auto_detects_swmfsolar_using_documented_precedence(
+def test_install_auto_detects_swmfsolar_into_launcher(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -260,11 +204,10 @@ def test_install_script_auto_detects_swmfsolar_using_documented_precedence(
     )
     assert expected_solar is not None
 
-    claude_config = _read_json(target_dir / ".mcp.json")
-    assert claude_config["mcpServers"]["swmf-prototype"]["env"] == {
-        "SWMF_ROOT": str(swmf_root.resolve()),
-        "SWMFSOLAR_ROOT": str(expected_solar),
-    }
+    launcher = (target_dir / ".swmf_ai" / "swmf").read_text(encoding="utf-8")
+    assert f"export SWMF_ROOT='{swmf_root.resolve()}'" in launcher
+    assert f"export SWMFSOLAR_ROOT='{expected_solar}'" in launcher
+    assert "SWMF_IDL_EXEC" not in launcher
 
 
 def test_install_script_requires_supported_agent(
@@ -286,7 +229,7 @@ def test_install_script_requires_supported_agent(
     assert "unsupported AGENT" in capsys.readouterr().err
 
 
-def test_make_help_documents_agent_scoped_install_bundle() -> None:
+def test_make_help_documents_install_bundle() -> None:
     result = subprocess.run(
         ["make", "help"],
         cwd=_repo_root(),
@@ -296,18 +239,14 @@ def test_make_help_documents_agent_scoped_install_bundle() -> None:
     )
 
     help_text = result.stdout
-    assert "AGENT=<name>          Required for make install." in help_text
     assert "Public targets:" in help_text
-    assert "make                             Bootstrap uv/.venv, sync dependencies, warm the embedding cache, and build the knowledge index" in help_text
-    assert "make install                     Bootstrap uv/.venv if needed, then write one agent-specific install bundle into TARGET_DIR" in help_text
-    assert "make clean                       Remove generated Python/build/test artifacts" in help_text
-    assert "make bootstrap" not in help_text
-    assert "make cache-model" not in help_text
-    assert "make preindex" not in help_text
-    assert "make prepare" not in help_text
-    assert "AGENT=claude          TARGET_DIR/.mcp.json + TARGET_DIR/CLAUDE.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.claude/skills -> src/agent_assets/skills" in help_text
-    assert "AGENT=codex           TARGET_DIR/.codex/config.toml + TARGET_DIR/AGENTS.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.codex/skills -> src/agent_assets/skills" in help_text
-    assert "Copilot CLI             .mcp.json + .github/copilot-instructions.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + .github/skills" in help_text
+    assert "AGENT=<name>          Required for make install." in help_text
+    assert "All agents            TARGET_DIR/.swmf_ai/swmf" in help_text
+    assert "AGENT=claude          TARGET_DIR/CLAUDE.md (header + SWMF_CORE_DISCIPLINE.md) + TARGET_DIR/.claude/skills -> src/agent_assets/skills" in help_text
+    assert "AGENT=codex           TARGET_DIR/AGENTS.md (header + discipline) + TARGET_DIR/.codex/skills -> src/agent_assets/skills" in help_text
+    # MCP config surfaces are gone.
+    assert ".mcp.json" not in help_text
+    assert "config.toml" not in help_text
 
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make is required for smoke tests")
@@ -335,30 +274,27 @@ def test_make_install_smoke_writes_expected_codex_bundle(tmp_path: Path) -> None
         text=True,
     )
 
-    config_path = target_dir / ".codex" / "config.toml"
+    launcher_path = target_dir / ".swmf_ai" / "swmf"
     skills_path = target_dir / ".codex" / "skills"
     instruction_path = target_dir / "AGENTS.md"
     symlink_path = target_dir / ".swmf_mcp_server"
 
-    assert config_path.exists()
-    assert instruction_path.is_symlink()
-    assert instruction_path.resolve() == (_repo_root() / "src" / "agent_assets" / "SWMF_CORE_DISCIPLINE.md").resolve()
+    # Generated instruction file (header + discipline), not a symlink.
+    assert instruction_path.exists()
+    assert not instruction_path.is_symlink()
+    instruction = instruction_path.read_text(encoding="utf-8")
+    assert "# SWMF Core Discipline" in instruction
+    assert str(launcher_path) in instruction
+
+    # Self-contained launcher exists and bakes in SWMF_ROOT.
+    assert launcher_path.exists()
+    assert f"export SWMF_ROOT='{swmf_root.resolve()}'" in launcher_path.read_text(encoding="utf-8")
+
+    # Skill tree and repo back-link are symlinks.
     assert skills_path.is_symlink()
     assert skills_path.resolve() == (_repo_root() / "src" / "agent_assets" / "skills").resolve()
     assert symlink_path.is_symlink()
     assert symlink_path.resolve() == _repo_root()
 
-    codex_config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    assert codex_config == {
-        "mcp_servers": {
-            "swmf-prototype": {
-                "command": str(target_dir / ".swmf_mcp_server" / ".venv" / "bin" / "python"),
-                "args": ["-m", "swmf_mcp_server.server"],
-                "cwd": str(target_dir / ".swmf_mcp_server"),
-                "env": {
-                    "SWMF_ROOT": str(swmf_root.resolve()),
-                    "SWMFSOLAR_ROOT": str(solar_root.resolve()),
-                },
-            }
-        }
-    }
+    # No MCP config written.
+    assert not (target_dir / ".codex" / "config.toml").exists()

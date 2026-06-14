@@ -20,15 +20,12 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
 ## Evidence order
 
 1. **Compare artifacts first**:
+   ```bash
+   swmf compare --left <baseline_path> --right <modified_path> \
+     --comparison-type param|log|run_dir|auto \
+     --question "<user question>"
    ```
-   compare_artifacts(
-     left  = <baseline_path>,
-     right = <modified_path>,
-     comparison_type = "param" | "log" | "run_dir" | "auto",
-     question = <user question>
-   )
-   ```
-   Read `differences` for structural/value changes. When `comparison_type="run_dir"`
+   Read `differences` for structural/value changes. When `--comparison-type run_dir`
    and both sides have a `PARAM.in`, the response includes a `param_diff` entry with a
    per-session command-name diff plus a unified text diff — surface this before falling
    back to file-list deltas.
@@ -36,21 +33,21 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
    log content; use bounded excerpts only after tool output names a need.
 
 2. **Inspect the anomalous side** (if one side has errors or a crash):
-   ```
-   inspect_artifact(artifact_type="log"|"param"|"run_dir", path=<anomalous_path>)
+   ```bash
+   swmf inspect --type log|param|run_dir --path <anomalous_path>
    ```
    The param inspector returns structural primitives only (sessions, includes,
    component map, external refs, parser errors); read the PARAM.in directly
    when you need to interpret the failing session or command flow.
 
 3. **Source grounding** (only if differences involve non-obvious config or code effect):
-   ```
-   get_evidence(query=<changed_entity>, mode="hybrid", goal="impact of difference")
+   ```bash
+   swmf get-evidence --query "<changed_entity>" --mode keyword --goal "impact of difference"
    ```
 
 4. **IDL visualization comparison** (only when the user asks how to visualize or
    plot the difference):
-   - inspect named result files with `inspect_artifact(artifact_type="result", path=<path>)`
+   - inspect named result files with `swmf inspect --type result --path <path>`
    - normalize broad plotting prompts into `func`, `plotmode`, `transform`, `slice`,
      `compare`, or `animate_data`
    - load `support/swmf-postproc/IDL_VISUALIZATION.md` for the comparison,
@@ -77,5 +74,5 @@ description: "Use when two SWMF things must be contrasted: run vs run, PARAM fil
 * differences listed by location: `left_value` vs `right_value`
 * each difference classified: "added", "removed", "changed", "structural"
 * runtime consequence linked to difference when evidence supports it
-* confirmed diffs (from `compare_artifacts`) vs inferred effects separated
+* confirmed diffs (from `swmf compare`) vs inferred effects separated
 * `uncertainty.known_unknowns` surfaced when present

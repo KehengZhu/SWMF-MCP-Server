@@ -1,0 +1,43 @@
+# Crosswalks for diagnostic / plot output specifications.
+crosswalks:
+
+  - id: white_light_los
+    phrases:
+      - "synthetic white-light image"
+      - "Thomson-scattered white light"
+      - "K-corona LOS"
+    commands:
+      - "#SAVEPLOT.StringPlot=los"
+      - "#LOOKUPTABLE.NameTable=AiaXrt"
+    xml_group: "SC:OUTPUT PARAMETERS"
+
+  - id: euv_los
+    phrases:
+      - "synthetic EUV"
+      - "AIA 211"
+      - "AIA emission measure"
+      - "STEREO/EUVI synthetic image"
+    commands:
+      - "#SAVEPLOT.StringPlot=los"
+      - "#LOOKUPTABLE.NameTable=euv"
+      - "#LOOKUPTABLE.NameTable=EuviA"
+      - "#LOOKUPTABLE.NameTable=EuviB"
+    xml_group: "SC:OUTPUT PARAMETERS"
+
+  - id: br_shell
+    phrases:
+      - "radial magnetic field on shell"
+      - "Br at outer boundary"
+      - "Br at source surface"
+    commands:
+      - "#SAVEPLOT.StringPlot=shl"
+    xml_group: "SC:OUTPUT PARAMETERS"
+
+  - id: satellite_trajectory
+    phrases:
+      - "Earth trajectory"
+      - "STEREO trajectory"
+      - "satellite extraction"
+    commands:
+      - "#SATELLITE"
+    xml_group: "SC:OUTPUT PARAMETERS"

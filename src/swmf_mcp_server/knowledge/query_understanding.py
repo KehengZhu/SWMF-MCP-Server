@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from ..catalog.source_index_catalog import (
-    SEARCH_MODE_HYBRID,
     SEARCH_MODE_KEYWORD,
     SLICE_ANALYST_CONTEXT,
     SLICE_SWMF_MANUALS,
@@ -267,8 +266,7 @@ def _classify_intent(
 
 
 def _preferred_search_mode(intent: str) -> str:
-    if intent in {"concept_explanation", "coupling_analysis", "documentation_lookup"}:
-        return SEARCH_MODE_HYBRID
+    # Semantic / hybrid retrieval has been removed; only keyword mode remains.
     return SEARCH_MODE_KEYWORD
 
 

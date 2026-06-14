@@ -302,13 +302,13 @@ def test_replicate_skill_documents_paper_intent_full_workflow() -> None:
     # Paper-intent section heading exists.
     assert "## Paper intent" in text
     # The agent calls the paper_spec inspector.
-    assert 'inspect_artifact(artifact_type="paper_spec"' in text
+    assert "swmf inspect --type paper_spec" in text
     # Confidence-per-field is documented as required output.
     assert "confidence_per_field" in text
     # Missing-fields discipline is documented.
     assert "paper_spec_missing_fields" in text
-    # MCP does not parse PDFs is explicitly stated.
-    assert "MCP does not parse PDFs" in text
+    # The CLI does not parse PDFs is explicitly stated.
+    assert "the swmf CLI does not parse PDFs" in text
     # Phase 3 wired (status mark may be either "(current)" or just present after Phase 4+).
     assert "Phase 3" in text
 
@@ -337,5 +337,5 @@ def test_validation_skill_fleshed_out_beyond_phase1_stub() -> None:
     # Anti-patterns include image-similarity rejection and OMNI deferral.
     assert "Image-similarity-as-deterministic-evidence" in text
     assert "compare_insitu.py" in text
-    # Boundary against compare_artifacts(comparison_type="reference") is stated.
-    assert 'comparison_type="reference"' in text
+    # Boundary against `swmf compare --comparison-type reference` is stated.
+    assert "--comparison-type reference" in text

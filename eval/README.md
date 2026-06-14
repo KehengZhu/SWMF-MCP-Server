@@ -54,3 +54,48 @@ See `papers/holdout.txt`. Briefly: a paper exits holdout after the
 agent scores composite-clean on it twice in a row, then joins train and
 a new paper enters holdout. This rotation is what keeps the eval signal
 honest as the rules layer grows.
+
+## Running the eval
+
+```bash
+# Single paper (Stage 1+2 only, no proposals):
+/swmf-improve --only=eval <paper-name>
+
+# Every paper in eval/papers/ plus holdout — produces a score matrix.
+# CI runs this on every refactor commit; auto-merge gates on it.
+/swmf-improve --only=eval --all
+
+# Full cycle (replicate + score + classify + propose + auto-merge):
+/swmf-improve <paper-name>
+```
+
+## Generality (anti-overfit)
+
+The eval was reshaped under the Option-2 refactor (plan Part D). Key
+invariants:
+
+1. Auto-merge requires no regression on any paper in `eval/papers/`
+   **or** in `holdout.txt`. A rule that improves one paper but degrades
+   another is rejected at Stage 5.
+2. The contamination tripwire scans across the **full** reference PARAM
+   corpus, not per-paper — a rule referencing `eval/papers/X/reference/`
+   is rejected even when the cycle's target paper is `Y`.
+3. Rule entries must express archetype-level patterns, not paper-specific
+   literals. `PoyntingFluxPerBSi = 0.476e6` is rejected; "for ADAPT-GONG
+   maps the value is paper-supplied, default from XML if absent" is
+   allowed.
+
+## Adding a second paper (recommended)
+
+The refactor declares completion once `eval/papers/` contains at least
+**two** papers (target + holdout). One paper alone cannot detect
+overfitting. To add a second paper:
+
+```bash
+mkdir -p eval/papers/<new-paper-name>/reference
+cp /path/to/paper.pdf eval/papers/<new-paper-name>/paper.pdf
+cp /path/to/gold/PARAM.in eval/papers/<new-paper-name>/reference/PARAM.in
+echo "<new-paper-name>" >> eval/papers/holdout.txt   # if reserved as holdout
+```
+
+The agent will pick it up on the next `--only=eval --all` invocation.

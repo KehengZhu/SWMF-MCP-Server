@@ -80,13 +80,7 @@ CACHE_DIR_NAME = ".swmf_mcp_cache"
 DB_FILE_NAME = "knowledge.db"
 ENV_DB_OVERRIDE = "SWMF_MCP_KNOWLEDGE_DB"
 SEARCH_MODE_KEYWORD = "keyword"
-SEARCH_MODE_SEMANTIC = "semantic"
-SEARCH_MODE_HYBRID = "hybrid"
-_SEARCH_MODES = frozenset({
-    SEARCH_MODE_KEYWORD,
-    SEARCH_MODE_SEMANTIC,
-    SEARCH_MODE_HYBRID,
-})
+_SEARCH_MODES = frozenset({SEARCH_MODE_KEYWORD})
 
 # Corpus slice labels (strings matching CorpusSlice enum values used by
 # the old swmf_semantic_index package — kept identical for compatibility)

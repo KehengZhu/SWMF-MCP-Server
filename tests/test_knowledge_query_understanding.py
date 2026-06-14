@@ -71,11 +71,14 @@ def test_understand_source_query_classifies_param_lookup() -> None:
     assert SLICE_SWMF_SOURCE in payload["recommended_corpus_slices"]
 
 
-def test_understand_source_query_prefers_hybrid_for_coupling_questions() -> None:
+def test_understand_source_query_keeps_keyword_for_coupling_questions() -> None:
+    # Semantic / hybrid retrieval has been removed; every intent now maps to
+    # the keyword backend, but the coupling-question classifier and the
+    # corpus-slice recommendations should still fire correctly.
     payload = understand_source_query("How does IH couple to SC during magnetogram workflows?")
 
     assert payload["intent"] == "coupling_analysis"
-    assert payload["preferred_search_mode"] == "hybrid"
+    assert payload["preferred_search_mode"] == "keyword"
     assert payload["entities"]["components"] == ["IH", "SC"]
     assert SLICE_SWMF_SOURCE in payload["recommended_corpus_slices"]
     assert SLICE_SWMF_MANUALS in payload["recommended_corpus_slices"]
@@ -89,7 +92,10 @@ def test_get_agent_context_pack_combines_search_and_reference(fake_swmf_root: Pa
     assert pack["query_analysis"]["intent"] == "param_lookup"
     assert pack["grounded_context"]["briefing"]["focus_commands"] == ["#STOP"]
     assert pack["grounded_context"]["reference_context"]["param_commands"][0]["definition"]["ok"] is True
-    assert pack["search_strategy"]["semantic_runtime"]["model_name"] is not None
+    # semantic_runtime has been removed from search_strategy; search_method
+    # is now always "keyword".
+    assert "semantic_runtime" not in pack["search_strategy"]
+    assert pack["search_strategy"]["search_method"] == "keyword"
     assert any(item["file_path"].endswith("CON_session.f90") for item in pack["grounded_context"]["evidence"])
 
 

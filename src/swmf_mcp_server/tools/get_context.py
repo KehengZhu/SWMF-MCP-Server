@@ -9,7 +9,7 @@ question so the agent can decide what to retrieve next.
 Internal backends (hidden from caller)
 ---------------------------------------
 - catalog
-- semantic / knowledge index
+- keyword index (BM25)
 - codebase map
 
 Output contract
@@ -47,7 +47,7 @@ Example response
     "symbols": []
   },
   "evidence": [],
-  "provenance": {"backend_used": "catalog+semantic"},
+  "provenance": {"backend_used": "catalog+keyword"},
   "uncertainty": {"known_unknowns": ["current case-specific runtime state not inspected"]}
 }
 
@@ -115,12 +115,11 @@ def get_context(
         if comp not in entities["components"]:
             entities["components"].append(comp)
 
-    # --- Evidence search ---
-    mode = "hybrid" if resolved_task_type in ("architecture", "debug", "compare") else "keyword"
+    # --- Evidence search (keyword-only after semantic-search removal) ---
     evidence, mode_used, ev_summary, degraded_reason = run_evidence_search(
         swmf_root=root.swmf_root_resolved,
         query=question,
-        mode=mode,
+        mode="keyword",
         scope=resolved_scope,
         top_k=top_k,
         goal=resolved_task_type,
@@ -157,14 +156,3 @@ def get_context(
         "uncertainty": {"known_unknowns": known_unknowns},
     }
     return with_root(payload, root)
-
-
-def register(app: Any) -> None:
-    app.tool(
-        description=(
-            "Give the agent compact repo/task orientation for a question. "
-            "Use for architecture questions, multi-component questions, or 'what area of the "
-            "codebase matters?' Returns entities (components, files, params, symbols), "
-            "a compact summary, and provenance."
-        )
-    )(get_context)

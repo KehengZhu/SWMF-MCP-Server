@@ -1,8 +1,9 @@
 """Primary knowledge-domain service surface.
 
-This module owns source-index orchestration and semantic retrieval for the
-knowledge domain. Callers should import this module directly rather than the
-legacy core shim.
+This module owns source-index orchestration for the knowledge domain.
+Semantic / embedding retrieval has been removed; all searches go through
+the catalog's keyword (BM25) backend. Callers should import this module
+directly rather than the legacy core shim.
 """
 from __future__ import annotations
 
@@ -10,9 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.source_index_catalog import (
-    SEARCH_MODE_HYBRID,
     SEARCH_MODE_KEYWORD,
-    SEARCH_MODE_SEMANTIC,
     SLICE_SWMF_SOURCE,
     SLICE_ANALYST_CONTEXT,
     SLICE_SWMFSOLAR_SOURCE,
@@ -26,9 +25,7 @@ from ..reference.service import (
     trace_param_command_for_root,
 )
 from .agent_context import build_agent_context_pack
-from .embeddings import get_text_embedder, get_text_embedder_runtime_payload
 from .query_understanding import analyze_query
-from .retrieval import merge_search_results, search_semantic_chunks
 
 _INDEX_BY_ROOT: dict[str, SourceIndexCatalog] = {}
 _EXTRA_ROOTS_KEY_BY_ROOT: dict[str, tuple[tuple[str, str], ...]] = {}
@@ -129,31 +126,7 @@ def _search_source_with_catalog(
     kind: str | None = None,
     corpus_slice: str | None = None,
     max_results: int = 20,
-    *,
-    search_mode: str = SEARCH_MODE_KEYWORD,
-    similarity_threshold: float | None = None,
 ) -> dict[str, Any]:
-    normalized = (search_mode or SEARCH_MODE_KEYWORD).strip().lower()
-    if normalized not in {SEARCH_MODE_KEYWORD, SEARCH_MODE_SEMANTIC, SEARCH_MODE_HYBRID}:
-        normalized = SEARCH_MODE_KEYWORD
-
-    effective_mode = SEARCH_MODE_KEYWORD
-    semantic_available = False
-    degraded_reason: str | None = None
-    embedder = get_text_embedder()
-    semantic_runtime = get_text_embedder_runtime_payload(embedder)
-
-    if normalized != SEARCH_MODE_KEYWORD and kind is not None:
-        degraded_reason = "Semantic retrieval does not support kind filtering yet; fell back to keyword search."
-    else:
-        semantic_available = embedder.is_available
-        if normalized != SEARCH_MODE_KEYWORD and semantic_available:
-            effective_mode = normalized
-        elif normalized != SEARCH_MODE_KEYWORD:
-            degraded_reason = embedder.availability_message or (
-                "Semantic retrieval backend unavailable; fell back to keyword search."
-            )
-
     keyword_results = catalog.search_symbols(
         query=query,
         component=component,
@@ -161,32 +134,9 @@ def _search_source_with_catalog(
         corpus_slice=corpus_slice,
         max_results=max_results,
     )
-
-    if effective_mode == SEARCH_MODE_KEYWORD:
-        results = keyword_results
-    else:
-        semantic_results = search_semantic_chunks(
-            catalog,
-            query=query,
-            component=component,
-            corpus_slice=corpus_slice,
-            max_results=max_results,
-            similarity_threshold=similarity_threshold,
-            embedder=embedder,
-        )
-        if effective_mode == SEARCH_MODE_SEMANTIC:
-            results = semantic_results
-        else:
-            results = merge_search_results(semantic_results, keyword_results, max_results=max_results)
-
     return {
-        "results": results,
-        "search_mode_requested": normalized,
-        "search_method": effective_mode,
-        "semantic_available": semantic_available,
-        "semantic_degraded_reason": degraded_reason,
-        "semantic_runtime": semantic_runtime,
-        "similarity_threshold": similarity_threshold,
+        "results": keyword_results,
+        "search_method": SEARCH_MODE_KEYWORD,
     }
 
 
@@ -258,8 +208,6 @@ def search_source(
     corpus_slice: str | None = None,
     max_results: int = 20,
     *,
-    search_mode: str = SEARCH_MODE_KEYWORD,
-    similarity_threshold: float | None = None,
     ensure_ready: bool = True,
 ) -> dict[str, Any]:
     if ensure_ready:
@@ -271,8 +219,6 @@ def search_source(
         kind=kind,
         corpus_slice=corpus_slice,
         max_results=max_results,
-        search_mode=search_mode,
-        similarity_threshold=similarity_threshold,
     )
 
 
@@ -336,7 +282,6 @@ def get_file_symbols(
 
 
 def status_as_payload(status: KnowledgeIndexStatus) -> dict[str, Any]:
-    semantic_runtime = get_text_embedder_runtime_payload()
     return {
         "ok": status.ok,
         "db_path": status.db_path,
@@ -348,7 +293,6 @@ def status_as_payload(status: KnowledgeIndexStatus) -> dict[str, Any]:
         "is_stale": status.is_stale,
         "message": status.message,
         "corpus_roots": status.corpus_roots,
-        "semantic_runtime": semantic_runtime,
     }
 
 
@@ -361,8 +305,6 @@ def get_agent_context_pack(
     query: str,
     max_results: int = 8,
     *,
-    search_mode: str | None = None,
-    similarity_threshold: float | None = None,
     ensure_ready: bool = True,
 ) -> dict[str, Any]:
     status = ensure_index_ready(swmf_root) if ensure_ready else get_index_status(swmf_root)
@@ -377,7 +319,6 @@ def get_agent_context_pack(
     catalog = _get_catalog(swmf_root)
     analysis = analyze_query(query)
     analysis_payload = analysis.as_payload()
-    requested_mode = (search_mode or analysis.preferred_search_mode or SEARCH_MODE_KEYWORD).strip().lower()
     component_filter = analysis.components[0] if len(analysis.components) == 1 else None
 
     search_payload, query_attempts = _collect_grounding_search_results(
@@ -386,8 +327,6 @@ def get_agent_context_pack(
         analysis=analysis,
         component=component_filter,
         max_results=max_results,
-        search_mode=requested_mode,
-        similarity_threshold=similarity_threshold,
     )
     reference_context = _collect_reference_context(swmf_root, analysis_payload)
 
@@ -397,12 +336,7 @@ def get_agent_context_pack(
         index_status=status_as_payload(status),
         search_results=search_payload["results"],
         reference_context=reference_context,
-        search_mode_requested=search_payload["search_mode_requested"],
         search_method=search_payload["search_method"],
-        semantic_available=search_payload["semantic_available"],
-        semantic_degraded_reason=search_payload["semantic_degraded_reason"],
-        semantic_runtime=search_payload["semantic_runtime"],
-        similarity_threshold=search_payload["similarity_threshold"],
         query_attempts=query_attempts,
     )
 
@@ -414,8 +348,6 @@ def _collect_grounding_search_results(
     analysis: Any,
     component: str | None,
     max_results: int,
-    search_mode: str,
-    similarity_threshold: float | None,
 ) -> tuple[dict[str, Any], list[dict[str, str | None]]]:
     merged_results: list[dict[str, Any]] = []
     query_attempts: list[dict[str, str | None]] = []
@@ -437,8 +369,6 @@ def _collect_grounding_search_results(
                     component=component_filter,
                     corpus_slice=corpus_slice,
                     max_results=max_results,
-                    search_mode=search_mode,
-                    similarity_threshold=similarity_threshold,
                 )
                 query_attempts.append(
                     {
@@ -452,7 +382,9 @@ def _collect_grounding_search_results(
                     current_payload["results"],
                     max_results=max_results,
                 )
-                search_payload = _merge_search_payload(search_payload, current_payload, merged_results)
+                if search_payload is None:
+                    search_payload = dict(current_payload)
+                search_payload["results"] = list(merged_results)
                 if current_payload["results"] or component_filter is None:
                     break
 
@@ -466,12 +398,12 @@ def _collect_grounding_search_results(
             component=component,
             corpus_slice=None,
             max_results=max_results,
-            search_mode=search_mode,
-            similarity_threshold=similarity_threshold,
         )
         query_attempts.append({"query": query, "corpus_slice": None, "component": None})
         merged_results = _merge_grounding_results(merged_results, fallback_payload["results"], max_results=max_results)
-        search_payload = _merge_search_payload(search_payload, fallback_payload, merged_results)
+        if search_payload is None:
+            search_payload = dict(fallback_payload)
+        search_payload["results"] = list(merged_results)
 
     assert search_payload is not None
     return search_payload, query_attempts
@@ -500,27 +432,6 @@ def _merge_grounding_results(
         merged.append(record)
         if len(merged) >= max_results:
             break
-    return merged
-
-
-def _merge_search_payload(
-    existing: dict[str, Any] | None,
-    current: dict[str, Any],
-    merged_results: list[dict[str, Any]],
-) -> dict[str, Any]:
-    if existing is None:
-        merged = dict(current)
-        merged["results"] = list(merged_results)
-        return merged
-
-    merged = dict(existing)
-    merged["results"] = list(merged_results)
-    merged["semantic_available"] = existing["semantic_available"] or current["semantic_available"]
-    merged["semantic_degraded_reason"] = existing["semantic_degraded_reason"] or current["semantic_degraded_reason"]
-    if not merged["semantic_available"] and current["semantic_available"]:
-        merged["semantic_runtime"] = current["semantic_runtime"]
-    if existing["search_method"] == SEARCH_MODE_KEYWORD and current["search_method"] != SEARCH_MODE_KEYWORD:
-        merged["search_method"] = current["search_method"]
     return merged
 
 
@@ -557,9 +468,7 @@ def _collect_reference_context(swmf_root: str, analysis_payload: dict[str, Any])
 
 
 __all__ = [
-    "SEARCH_MODE_HYBRID",
     "SEARCH_MODE_KEYWORD",
-    "SEARCH_MODE_SEMANTIC",
     "SLICE_ANALYST_CONTEXT",
     "SLICE_SWMFSOLAR_SOURCE",
     "_EXTRA_ROOTS_KEY_BY_ROOT",

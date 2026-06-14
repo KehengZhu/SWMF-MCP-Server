@@ -4,15 +4,16 @@ Purpose
 -------
 Retrieve grounded local evidence for a query. This is the main retrieval tool.
 All evidence is local (source files, PARAM.XML, catalogs, knowledge index).
-The caller specifies a query and optional retrieval mode; the server routes
-internally across keyword, semantic, or hybrid backends. Workflow discovery is
-handled as a `task_type` use case rather than a separate tool.
+
+Semantic / hybrid retrieval has been removed; every search now uses the
+catalog's keyword (BM25) backend. The `mode` argument is kept for backward
+compatibility but only "keyword" is honoured — other values are silently
+coerced. Workflow discovery is handled as a `task_type` use case rather than
+a separate tool.
 
 Internal backends (hidden from caller)
 ---------------------------------------
 - keyword search (BM25 / catalog)
-- semantic search (embedding index)
-- hybrid (default: keyword + semantic, reranked)
 - symbol lookup
 - catalog lookup
 
@@ -43,7 +44,6 @@ Example request
 ---------------
 {
   "query": "DoCoupleGMIE",
-  "mode": "hybrid",
   "scope": ["GM", "IE"],
   "top_k": 8,
   "goal": "find definition and usage"
@@ -57,21 +57,18 @@ Example response
     {"type": "param_spec", "path": "PARAM.XML", "snippet": "...", "score": 0.91},
     {"type": "code", "path": "GM/src/ModUser.f90", "snippet": "...", "score": 0.87}
   ],
-  "provenance": {"mode_used": "hybrid", "scope": ["GM", "IE"]},
+  "provenance": {"mode_used": "keyword", "scope": ["GM", "IE"]},
   "uncertainty": {"known_unknowns": ["runtime behavior not inspected"]}
 }
 
 Field semantics
 ---------------
 query   : Required. The search query, token, symbol name, or natural-language question.
-mode    : Optional retrieval mode.
-          "hybrid"   — keyword + semantic, reranked (default).
-          "keyword"  — BM25 / catalog / exact match. Use when query contains precise tokens.
-          "semantic" — embedding similarity only.
+mode    : Deprecated. Only "keyword" is honoured; other values are coerced.
 scope   : Optional list of SWMF component IDs to restrict retrieval (e.g. ["GM","IE"]).
 top_k   : Optional max number of evidence items to return. Default 8, max 100.
 goal    : Optional freeform description of what the agent is trying to accomplish.
-          Used to improve reranking and snippet selection.
+          Used to improve snippet selection.
 task_type: Optional workflow hint. Use "lookup" for ordinary evidence retrieval,
           or "configuration", "build", "run", "analysis" for workflow evidence.
 module  : Optional component hint used when collecting workflow evidence.
@@ -90,7 +87,7 @@ from ._router import run_evidence_search
 from ._workflow import discover_workflow_entrypoints
 from ..reference import explain_idl_procedure_for_root, list_idl_procedures_for_root
 
-_VALID_MODES = frozenset({"hybrid", "keyword", "semantic"})
+_VALID_MODES = frozenset({"keyword"})
 _VALID_TASK_TYPES = frozenset({"lookup", "configuration", "build", "run", "analysis"})
 _DEFAULT_TOP_K = 8
 _MAX_TOP_K = 100
@@ -539,15 +536,15 @@ def get_evidence(
     """Retrieve grounded local evidence for a query.
 
     Use for symbol/param/file lookup, exact questions, supporting snippets for
-    a claim, or evidence gathering before answering. Hybrid mode (default) runs
-    keyword + semantic search and reranks. Use keyword when the query is a
-    precise token or symbol name. Use semantic for natural-language questions.
+    a claim, or evidence gathering before answering. All searches use the
+    catalog keyword (BM25) backend; the `mode` argument is kept for backward
+    compatibility but only "keyword" is honoured.
     """
     failure, root = resolve_root_or_failure(swmf_root, run_dir)
     if failure is not None or root is None:
         return failure or {"ok": False, "hard_error": True, "message": "Could not resolve SWMF root."}
 
-    resolved_mode = mode if mode in _VALID_MODES else "hybrid"
+    resolved_mode = "keyword"
     resolved_task_type = _normalize_task_type(task_type)
     resolved_module = _normalize_module(module)
     resolved_scope = _append_unique_scope(list(scope or []), resolved_module)
@@ -662,16 +659,3 @@ def get_evidence(
         "uncertainty": {"known_unknowns": known_unknowns},
     }
     return with_root(payload, root)
-
-
-def register(app: Any) -> None:
-    app.tool(
-        description=(
-            "Retrieve grounded local evidence for a query (source code, PARAM.XML, docs, "
-            "examples, IDL). Use mode='keyword' for precise token/symbol lookup, "
-            "mode='semantic' for natural-language questions, mode='hybrid' (default) "
-            "for general retrieval. Use task_type='configuration'|'build'|'run'|'analysis' "
-            "when you want workflow entrypoint evidence returned through the same tool. "
-            "Optionally restrict to SWMF components via scope or module."
-        )
-    )(get_evidence)

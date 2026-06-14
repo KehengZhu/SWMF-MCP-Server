@@ -24,7 +24,7 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 ## Evidence order
 
 ### Output interpretation
-1. `inspect_artifact(artifact_type="run_dir", path=<run_dir>)`
+1. `swmf inspect --type run_dir --path <run_dir>`
    - output file inventory and layout
    - use `run_dir_layout`, `postproc_state`,
      `component_artifact_inventory`, `restart_inventory`, and
@@ -36,19 +36,19 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
      evidence is missing/unreadable or the user asks for raw content
    - compact runlog status if logs are present; do not directly read whole
      runlogs unless the user explicitly requests raw log content
-   - if deeper runlog investigation is needed, call
-     `inspect_artifact(artifact_type="runlog", path=<runlog>)` on the specific
+   - if deeper runlog investigation is needed, run
+     `swmf inspect --type runlog --path <runlog>` on the specific
      runlog listed by run-dir inspection
-2. `get_evidence(mode="keyword", goal="output format or field definition")`
+2. `swmf get-evidence --mode keyword --goal "output format or field definition"`
    - field semantics, output variable definitions
-3. `get_evidence(query="postprocessing", task_type="analysis", goal="postprocessing")`
+3. `swmf get-evidence --query "postprocessing" --task-type analysis --goal "postprocessing"`
    - postprocessing scripts and entrypoints
 
 ### IDL visualization
-1. If a run directory or output file is named, first call `inspect_artifact(artifact_type="run_dir"|"result", path=<path>)`
+1. If a run directory or output file is named, first run `swmf inspect --type run_dir|result --path <path>`
    - deterministic artifact type, output layout, and likely plot files
    - for `run_dir`, then read the run-local `PARAM.in` completely and reason
-     from the actual file contents; do not rely on `inspect_artifact` for
+     from the actual file contents; do not rely on `swmf inspect` for
      PARAM semantics beyond brief presence/counts and output-artifact matching
    - for `run_dir`, use `run_dir_layout`, `postproc_state`,
      `component_artifact_inventory`, `restart_inventory`, and
@@ -62,10 +62,10 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
    - named procedure or workflow: `plot_data`, `show_data`, `read_data`, `animate_data`, `plot_log_data`, `read_log_data`
    - inventory request: `list IDL plotting procedures`
    - manual detail: `func`, `plotmode`, `transform`, `slice`, `export`
-   - do not send a broad question such as "how do I visualize this" directly to `get_evidence`
-3. Call `get_evidence(query=<normalized IDL procedure or inventory task>, mode="keyword", goal="IDL procedure signature and usage")`
+   - do not send a broad question such as "how do I visualize this" directly to `swmf get-evidence`
+3. Run `swmf get-evidence --query <normalized IDL procedure or inventory task> --mode keyword --goal "IDL procedure signature and usage"`
    - deterministic IDL catalog evidence for named procedures or procedure lists
-4. Call `get_evidence(query=<normalized func/plotmode/output-format term>, mode="keyword", goal="IDL visualization manual detail")`
+4. Run `swmf get-evidence --query <normalized func/plotmode/output-format term> --mode keyword --goal "IDL visualization manual detail"`
    - `func`, `plotmode`, transformation, slicing, save/export, or output-format evidence
 5. Load `support/swmf-postproc/IDL_VISUALIZATION.md`
    - detailed policy for composing the plotting workflow
@@ -87,12 +87,12 @@ description: "Use when the user wants to interpret SWMF outputs: what results me
 
 ## Outputs
 
-* what output artifacts were found (from `inspect_artifact`)
+* what output artifacts were found (from `swmf inspect`)
 * field/variable definitions cited from evidence
-* postprocessing workflow evidence from `get_evidence(task_type="analysis")`
+* postprocessing workflow evidence from `swmf get-evidence --task-type analysis`
 * for IDL visualization:
   * artifact/file assumptions
-  * PARAM-driven output intent (saved plot forms/areas/cadence when available from `run_dir`)
+  * PARAM-driven output intent (saved plot forms/areas/cadence when available from `swmf inspect --type run_dir`)
   * authoritative IDL entrypoint or procedure
   * required `read_data`/`show_data`/`plot_data` sequence
   * relevant `func` and `plotmode` semantics

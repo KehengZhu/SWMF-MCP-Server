@@ -267,12 +267,15 @@ class TestPaperSpecExtensions:
 
 
 class TestSkillWiring:
-    def test_swmf_replicate_references_corpus_diff_step(self) -> None:
+    def test_swmf_replicate_references_corpus_floor(self) -> None:
+        # Option-2: corpus-mined required lists are gone (they hid #CURLB0 in
+        # Liu 2026). Required floors now live in required_floors/, attested
+        # to PARAM.XML <if> conditionals or Fortran source.
         skill_md = _REPO_ROOT / "src" / "agent_assets" / "skills" / "swmf-replicate" / "SKILL.md"
         text = skill_md.read_text(encoding="utf-8")
-        assert "Corpus diff (mandatory)" in text, "corpus-diff step missing from swmf-replicate"
-        assert "defaults/mined/" in text, "mined-defaults lane not referenced"
-        assert "equation_set_required.yaml" in text, "equation-set mapping not referenced"
+        assert "required_floors" in text or "equation_set.yaml" in text, (
+            "equation-set floor not referenced"
+        )
 
     def test_swmf_replicate_references_archetype_catalog(self) -> None:
         skill_md = _REPO_ROOT / "src" / "agent_assets" / "skills" / "swmf-replicate" / "SKILL.md"
@@ -295,11 +298,11 @@ class TestSkillWiring:
                     offenders.append(fp)
         assert not offenders, f"Run_Max_RP_* still referenced in: {offenders}"
 
-    def test_awsom_cme_template_uses_shipped_param(self) -> None:
-        manifest = _RULES_DIR / "templates" / "awsom_cme.yaml"
-        data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-        for key in ("start_template", "restart_template"):
-            assert "Run_" not in str(data[key]), f"{key} references Run_*: {data[key]}"
-            assert str(data[key]).startswith("SWMFSOLAR/Param/"), (
-                f"{key} should point at shipped SWMFSOLAR/Param/: {data[key]}"
-            )
+    def test_template_index_points_at_shipped_swmf_files(self) -> None:
+        # Option-2 replaces forked YAML manifests with INDEX.md + discovery.md.
+        # The index must point at shipped SWMF/SWMFSOLAR/component PARAM paths,
+        # never at personal run dirs (Run_*) inside SWMFSOLAR.
+        index_md = (_RULES_DIR / "templates" / "INDEX.md").read_text(encoding="utf-8")
+        assert "Run_" not in index_md, "templates/INDEX.md must not reference personal Run_* dirs"
+        assert "SWMFSOLAR/Param/" in index_md
+        assert "SC/BATSRUS/" in index_md or "GM/BATSRUS/" in index_md

@@ -10,7 +10,7 @@ description: "Support skill for validating a SWMF run against an external refere
 one side of a comparison is a **reference** — a paper figure, an observation
 trace (OMNI / STEREO / DSCOVR), a CCMC quick-look panel — rather than another
 SWMF artifact. It does not compare runs against each other; that is
-`swmf-compare` with `compare_artifacts(comparison_type="run_dir"|"result"|"log")`.
+`swmf-compare` with `swmf compare --comparison-type run_dir|result|log`.
 
 ## When to use
 
@@ -39,36 +39,36 @@ SWMF artifact. It does not compare runs against each other; that is
 ## Evidence order
 
 1. **Run output inventory** — discover what the modeled run produced:
-   ```
-   inspect_artifact(artifact_type="run_dir", path=<modeled_run>)
+   ```bash
+   swmf inspect --type run_dir --path <modeled_run>
    ```
    Read `component_output_artifacts` to see which `#SAVEPLOT` groups landed
    on disk. The agent maps the reference target (e.g. "LASCO C2 base difference")
    to the corresponding SC IDL plot group.
 
 2. **Per-output inspection** — for each candidate modeled output:
-   ```
-   inspect_artifact(artifact_type="result", path=<modeled_output_file>)
+   ```bash
+   swmf inspect --type result --path <modeled_output_file>
    ```
    Surface the file format, header variables, snapshot count.
 
 3. **Reference-side inspection (when the reference is also a SWMF-typed artifact)** —
    e.g. the CCMC delivered a `Run information_CCMC.md` plus matching IDL output
    files, or another run directory shipped with the paper:
+   ```bash
+   swmf inspect --type ccmc_spec --path <ref_spec>
+   swmf inspect --type result    --path <ref_idl_out>
+   swmf inspect --type run_dir   --path <ref_run_dir>
+   swmf compare --comparison-type result|log|run_dir \
+                --left <reference> --right <modeled>
    ```
-   inspect_artifact(artifact_type="ccmc_spec", path=<ref_spec>)
-   inspect_artifact(artifact_type="result",    path=<ref_idl_out>)
-   inspect_artifact(artifact_type="run_dir",   path=<ref_run_dir>)
-   compare_artifacts(comparison_type="result"|"log"|"run_dir",
-                     left=<reference>, right=<modeled>)
-   ```
-   `compare_artifacts(comparison_type="run_dir")` already returns a `param_diff`
+   `swmf compare --comparison-type run_dir` already returns a `param_diff`
    block when both sides have `PARAM.in`; surface that before falling back to
    file-list deltas.
 
 4. **Paper-spec or paper_spec normalization** — when the reference is a paper:
-   ```
-   inspect_artifact(artifact_type="paper_spec", path=<paper_spec.json>)
+   ```bash
+   swmf inspect --type paper_spec --path <paper_spec.json>
    ```
    Use `paper_spec_summary` to identify named figures/diagnostics; treat
    `confidence_per_field` as the priority order for what to validate first.
@@ -78,7 +78,7 @@ SWMF artifact. It does not compare runs against each other; that is
    * The agent shells SWMFSOLAR's `Scripts/compare_insitu.py` (loaded via
      `swmf-swmfsolar`) — that script owns the OMNI download and overlay.
    * If a numerical metric is requested, compute it from the resulting CSV/IDL
-     trace; do not put metric arithmetic in MCP.
+     trace; do not put metric arithmetic in the swmf CLI.
 
 6. **IDL rendering hand-off** — for any visual side-by-side:
    ```
@@ -90,11 +90,11 @@ SWMF artifact. It does not compare runs against each other; that is
 ## Validation methods (allowed `comparison_method` values)
 
 * `deterministic_diff` — both sides are SWMF-typed artifacts (run_dir / result /
-   log) and `compare_artifacts` produced a structural diff. The lowest-judgment
+   log) and `swmf compare` produced a structural diff. The lowest-judgment
    class.
 * `numerical_metric` — a defined scalar (RMSE on density at L1, peak-arrival
    delta in hours, integrated SEP fluence ratio). Computed by the agent (or
-   `compare_insitu.py`); MCP does not adjudicate.
+   `compare_insitu.py`); the swmf CLI does not adjudicate.
 * `idl_overlay` — `swmf-postproc` produced a side-by-side panel/animation.
    The user confirms the visual match; the skill records `pending_user_review`
    until they do.
@@ -136,10 +136,10 @@ This skill does **not** classify a paper figure as "matched" by image
 inspection alone. It drives an IDL-rendered local equivalent and asks the
 user to confirm visually unless a numerical metric is available.
 
-`compare_artifacts(comparison_type="reference")` does **not** exist in the
-public MCP surface (rejected in plan §5.1). Reference comparison crosses
+`swmf compare --comparison-type reference` does **not** exist in the
+public swmf CLI surface (rejected in plan §5.1). Reference comparison crosses
 domains (image ↔ observation trace ↔ simulated trace) and is judgmental;
-keeping it skill-side preserves the deterministic-MCP boundary.
+keeping it skill-side preserves the deterministic swmf CLI boundary.
 
 ## Helper skills allowed
 
@@ -157,8 +157,8 @@ keeping it skill-side preserves the deterministic-MCP boundary.
   match by image hashing. Visual comparison is presented to the user.
 * **Re-implementing OMNI download.** SWMFSOLAR `compare_insitu.py` already
   owns the in-situ comparison pipeline; defer there via `swmf-swmfsolar`.
-* **MCP-as-reference-fetcher.** Network I/O for paper PDFs, OMNI series, or
-  CCMC quick-looks is shell-side. MCP only inspects the resulting local files.
+* **swmf-CLI-as-reference-fetcher.** Network I/O for paper PDFs, OMNI series, or
+  CCMC quick-looks is shell-side. The swmf CLI only inspects the resulting local files.
 * **Silently dropping low-confidence paper fields.** Every `paper_spec` field
   with low `confidence_per_field` carries into the validation output as a
   `provenance_lane=inferred` target with `uncertainty.known_unknowns` populated;

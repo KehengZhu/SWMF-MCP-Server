@@ -11,7 +11,6 @@ requires-python = ">=3.11"
 dependencies = [
   "astropy>=7.2.0",
   "httpx>=0.28.1",
-  "mcp[cli]>=1.0.0,<2.0.0",
   "pip>=26.0.1",
   "pytest>=9.0.2",
   "pyyaml>=6.0",
@@ -21,15 +20,9 @@ authors = [
 ]
 
 [project.scripts]
-swmf-mcp-server = "swmf_mcp_server.server:main"
+swmf = "swmf_mcp_server.cli:main"
 
 [project.optional-dependencies]
-semantic = [
-  "fastembed>=0.8.0",
-]
-semantic-gpu = [
-  "fastembed-gpu>=0.8.0",
-]
 test = [
   "pytest>=8.2.0",
   "astropy>=6.0.0",

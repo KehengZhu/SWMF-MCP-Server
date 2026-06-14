@@ -28,14 +28,8 @@ Not in scope: architecture, build/run workflow, failure diagnosis.
 
 ## Tool Protocol
 
-```
-get_evidence(
-  query = <exact_token>,
-  mode = "keyword",
-  scope = [<component if named>],
-  top_k = 6,
-  goal = "find definition"
-)
+```bash
+swmf get-evidence --query "<exact_token>" --mode keyword --scope <component if named> --top-k 6 --goal "find definition"
 ```
 
 If score ≥ 0.7 and snippet contains the token → answer from that evidence.
@@ -45,14 +39,14 @@ Grep fallback (only if keyword returns 0 or weak results):
 * No broad SWMF tree grep
 
 Last resort (one call only):
-```
-get_evidence(query=<token>, mode="hybrid", top_k=8)
+```bash
+swmf get-evidence --query "<token>" --mode keyword --top-k 8
 ```
 If this also fails → report not found.
 
 ## Output Contract
 
 * type, path, start_line (if available), snippet
-* Do NOT call `get_context` for orientation
+* Do NOT run `swmf get-context` for orientation
 * Do NOT widen to multi-hop search
 * After 3 failed attempts → report "not found" explicitly

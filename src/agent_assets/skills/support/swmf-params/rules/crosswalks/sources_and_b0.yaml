@@ -1,0 +1,70 @@
+# Paper-phrase → SWMF command crosswalks for the B0 / source-surface lane.
+# Consumed by swmf-replicate Stage 1 (spec extraction) and Stage 3 (block-by-block
+# authoring) when the paper's terminology doesn't match the PARAM.XML command name.
+#
+# Entry format:
+#   phrases:    one or more phrases (case-insensitive) that the agent may see in a paper
+#   commands:   list of `#COMMAND.parameter` references that implement the concept in SWMF
+#   xml_group:  the PARAM.XML <commandgroup> the agent must consult via
+#               swmf inspect --type xml --xml-scope 'commandgroup:...' before authoring.
+#               Pass the same --run-dir <run directory> here as on the later
+#               swmf inspect --type param --check-xml-audit launch check so the XML
+#               audit gate can correlate these reads (persisted to
+#               <run_dir>/.swmf_ai/audit.json) with the launch check.
+#   archetypes: optional — narrow the crosswalk to specific archetypes
+#   notes:      one-line explanation (why this mapping is non-obvious)
+#   provenance: where this mapping came from (eval/papers/.../REPORT.md, expert review, etc.)
+
+crosswalks:
+
+  - id: source_surface_radius
+    phrases:
+      - "source surface at 2.5 R"
+      - "source surface 2.5 Rs"
+      - "PFSS source surface"
+      - "potential field source surface"
+      - "current-free B0 radius"
+    commands:
+      - "#CURLB0.rCurrentFreeB0"
+    xml_group: "SC:SCHEME PARAMETERS"
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only, sofie_steady]
+    notes: >
+      Papers often say "source surface at 2.5 R⊙" meaning the radius at which
+      the PFSS solution becomes current-free. In SWMF this maps to
+      #CURLB0.rCurrentFreeB0 (default 2.5 R⊙), NOT to #HARMONICSGRID.rSourceSurface
+      which is the harmonic-grid outer radius (commonly 25 R⊙).
+    provenance:
+      lane: crosswalk
+      added_by: option-2-refactor-seed
+      added_for_eval: eclipse2024  # Liu et al. 2026 #CURLB0 omission
+
+  - id: pfss_initial_field
+    phrases:
+      - "iterative finite-difference potential field"
+      - "FDIPS"
+      - "fdips_bxyz"
+      - "Toth 2011 PFSS solver"
+    commands:
+      - "#LOOKUPTABLE.B0"
+    xml_group: "SC:SCHEME PARAMETERS"
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    notes: >
+      When the paper cites Tóth et al. 2011's FDIPS solver, the agent should
+      use the #LOOKUPTABLE B0 path (loading fdips_bxyz.out) rather than the
+      harmonic-decomposition #HARMONICSFILE path. The two are alternative B0
+      initializations; the FDIPS path is heavier but matches papers that
+      explicitly cite it.
+
+  - id: harmonic_b0
+    phrases:
+      - "spherical harmonic decomposition"
+      - "harmonics file"
+      - "harmonics expansion of the photospheric field"
+    commands:
+      - "#HARMONICSFILE.NameHarmonicsFile"
+      - "#HARMONICSGRID"
+    xml_group: "SC:SCHEME PARAMETERS"
+    notes: >
+      Spherical-harmonic B0 initialization. #HARMONICSGRID.rSourceSurface is the
+      *harmonic-grid outer radius* (default 25 R⊙), not the PFSS source surface
+      cited in many papers. For the latter use #CURLB0 (see source_surface_radius).

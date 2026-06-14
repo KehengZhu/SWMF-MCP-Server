@@ -1,8 +1,8 @@
 # SWMF AI – bootstrap/install helper
 #
 # Public targets
-#   make          Bootstrap the Python MCP runtime and prepare the knowledge index
-#   install       Write one agent-specific MCP config plus agent asset symlinks
+#   make          Bootstrap the Python runtime and prepare the knowledge index
+#   install       Write the swmf launcher, agent instruction file, and skill symlinks
 #   clean         Remove generated Python/build/test artifacts
 #
 # Optional flags (override on the command line, e.g. make SWMF_ROOT=/path/to/SWMF)
@@ -32,7 +32,6 @@ SWMFSOLAR_ROOT ?=
 SWMF_IDL_EXEC  ?=
 AGENT          ?=
 TARGET_DIR     ?= $(REPO_DIR)
-SEMANTIC_EXTRA ?= $(shell if command -v nvidia-smi >/dev/null 2>&1; then echo semantic-gpu; else echo semantic; fi)
 
 # Resolved absolute paths (handles relative inputs gracefully)
 _SWMF_ABS       := $(abspath $(SWMF_ROOT))
@@ -43,7 +42,7 @@ _TARGET_ABS     := $(abspath $(TARGET_DIR))
 # ---------------------------------------------------------------------------
 # Phony targets
 # ---------------------------------------------------------------------------
-.PHONY: all _bootstrap _prepare_runtime _semantic_deps _cache_model _preindex install clean help
+.PHONY: all _bootstrap _prepare_runtime _semantic_deps _preindex install clean help
 
 all: _prepare_runtime
 
@@ -66,32 +65,25 @@ _bootstrap:
 	test -x "$$UV_BIN" || (echo "ERROR: uv installation succeeded but no executable was found." && exit 1); \
 	echo "==> Using uv: $$UV_BIN"; \
 	if [ -x "$(PYTHON)" ]; then \
-		if UV_CACHE_DIR="$(UV_CACHE_DIR)" "$$UV_BIN" sync --directory "$(REPO_DIR)" --extra "$(SEMANTIC_EXTRA)" --check >/dev/null 2>&1; then \
+		if UV_CACHE_DIR="$(UV_CACHE_DIR)" "$$UV_BIN" sync --directory "$(REPO_DIR)" --check >/dev/null 2>&1; then \
 			echo "==> Existing .venv is already synchronized; reusing $(VENV)"; \
 			exit 0; \
 		fi; \
 		echo "==> Existing .venv is present but needs sync; updating in place"; \
 	fi; \
 	UV_CACHE_DIR="$(UV_CACHE_DIR)" "$$UV_BIN" venv "$(VENV)" --allow-existing; \
-	UV_CACHE_DIR="$(UV_CACHE_DIR)" "$$UV_BIN" sync --directory "$(REPO_DIR)" --extra "$(SEMANTIC_EXTRA)"
+	UV_CACHE_DIR="$(UV_CACHE_DIR)" "$$UV_BIN" sync --directory "$(REPO_DIR)"
 
 # ---------------------------------------------------------------------------
-# _prepare_runtime – run all local MCP preparation steps except install
+# _prepare_runtime – run all local preparation steps except install
 # ---------------------------------------------------------------------------
-_prepare_runtime: _cache_model _preindex
+_prepare_runtime: _preindex
 
 # ---------------------------------------------------------------------------
-# _semantic_deps – ensure the runtime is ready for embedding/index operations
+# _semantic_deps – ensure the runtime is ready for index operations
 # ---------------------------------------------------------------------------
 _semantic_deps: _bootstrap
-	@echo "==> uv environment is ready with extras: $(SEMANTIC_EXTRA)"
-
-# ---------------------------------------------------------------------------
-# _cache_model – download/warm the local embedding model cache
-# ---------------------------------------------------------------------------
-_cache_model: _semantic_deps
-	@echo "==> Caching embedding model locally…"
-	$(PYTHON) "$(SCRIPTS_DIR)/cache_model.py"
+	@echo "==> uv environment is ready"
 
 # ---------------------------------------------------------------------------
 # _preindex – build the knowledge index used by evidence search
@@ -107,7 +99,7 @@ _preindex: _semantic_deps
 # ---------------------------------------------------------------------------
 install: _bootstrap
 	@test -n "$(strip $(AGENT))" || (echo "ERROR: AGENT is required. Choose one of: claude, copilot-vscode, copilot-cli, codex" && exit 1)
-	@echo "==> Installing MCP bundle into: $(_TARGET_ABS)"
+	@echo "==> Installing SWMF AI bundle into: $(_TARGET_ABS)"
 	@mkdir -p "$(_TARGET_ABS)"
 	@if [ "$(_TARGET_ABS)" != "$(REPO_DIR)" ]; then \
 		ln -sfn "$(REPO_DIR)" "$(_TARGET_ABS)/.swmf_mcp_server"; \
@@ -142,7 +134,7 @@ help:
 	@echo "SWMF AI – Makefile"
 	@echo ""
 	@echo "Public targets:"
-	@echo "  make                             Bootstrap uv/.venv, sync dependencies, warm the embedding cache, and build the knowledge index"
+	@echo "  make                             Bootstrap uv/.venv, sync dependencies, and build the knowledge index"
 	@echo "  make install                     Bootstrap uv/.venv if needed, then write one agent-specific install bundle into TARGET_DIR"
 	@echo "  make clean                       Remove generated Python/build/test artifacts"
 	@echo ""
@@ -160,23 +152,22 @@ help:
 	@echo "  Only the first existing path is written."
 	@echo ""
 	@echo "Other optional variables:"
-	@echo "  SEMANTIC_EXTRA=<name>  semantic or semantic-gpu (default auto-detect)"
 	@echo "  BOOTSTRAP_PYTHON=<path>  Python used to install uv when uv is missing"
 	@echo "  UV_CACHE_DIR=<path>  Writable cache dir for uv. Default: $(UV_CACHE_DIR)"
-	@echo "  SWMF_KNOWLEDGE_EMBEDDING_MODEL=<name-or-path>  Embedding model override"
 	@echo ""
-	@echo "make install writes exactly one config surface plus symlinks for instructions and skills:"
-	@echo "  AGENT=claude          TARGET_DIR/.mcp.json + TARGET_DIR/CLAUDE.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.claude/skills -> src/agent_assets/skills"
-	@echo "  AGENT=copilot-vscode  TARGET_DIR/.vscode/mcp.json + TARGET_DIR/.github/copilot-instructions.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.github/skills -> src/agent_assets/skills"
-	@echo "  AGENT=copilot-cli     TARGET_DIR/.mcp.json + TARGET_DIR/.github/copilot-instructions.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.github/skills -> src/agent_assets/skills"
-	@echo "  AGENT=codex           TARGET_DIR/.codex/config.toml + TARGET_DIR/AGENTS.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + TARGET_DIR/.codex/skills -> src/agent_assets/skills"
+	@echo "make install writes a self-contained swmf launcher, one agent instruction file, and a skills symlink:"
+	@echo "  All agents            TARGET_DIR/.swmf_ai/swmf  (launcher: bakes in SWMF_ROOT, execs the venv swmf)"
+	@echo "  AGENT=claude          TARGET_DIR/CLAUDE.md (header + SWMF_CORE_DISCIPLINE.md) + TARGET_DIR/.claude/skills -> src/agent_assets/skills"
+	@echo "  AGENT=copilot-vscode  TARGET_DIR/.github/copilot-instructions.md (header + discipline) + TARGET_DIR/.github/skills -> src/agent_assets/skills"
+	@echo "  AGENT=copilot-cli     TARGET_DIR/.github/copilot-instructions.md (header + discipline) + TARGET_DIR/.github/skills -> src/agent_assets/skills"
+	@echo "  AGENT=codex           TARGET_DIR/AGENTS.md (header + discipline) + TARGET_DIR/.codex/skills -> src/agent_assets/skills"
 	@echo "  External TARGET_DIR also gets: TARGET_DIR/.swmf_mcp_server -> $(REPO_DIR)"
 	@echo ""
 	@echo "Agent compatibility:"
-	@echo "  Claude Code             .mcp.json + CLAUDE.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + .claude/skills"
-	@echo "  Copilot Chat / VS Code  .vscode/mcp.json + .github/copilot-instructions.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + .github/skills"
-	@echo "  Copilot CLI             .mcp.json + .github/copilot-instructions.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + .github/skills"
-	@echo "  Codex CLI               .codex/config.toml + AGENTS.md -> src/agent_assets/SWMF_CORE_DISCIPLINE.md + .codex/skills"
+	@echo "  Claude Code             CLAUDE.md + .claude/skills"
+	@echo "  Copilot Chat / VS Code  .github/copilot-instructions.md + .github/skills"
+	@echo "  Copilot CLI             .github/copilot-instructions.md + .github/skills"
+	@echo "  Codex CLI               AGENTS.md + .codex/skills"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make"

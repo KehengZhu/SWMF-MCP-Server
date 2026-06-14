@@ -1,0 +1,54 @@
+# Crosswalks for grid geometry, AMR criteria, refinement regions.
+crosswalks:
+
+  - id: angular_resolution_deg
+    phrases:
+      - "angular resolution"
+      - "dphi"
+      - "degrees per cell"
+    commands:
+      - "#AMRCRITERIARESOLUTION.dphi"
+      - "#GRIDRESOLUTION.Resolution"
+    xml_group: "SC:AMR PARAMETERS"
+    notes: >
+      Papers usually specify AMR resolution in degrees per cell (e.g. 0.7°).
+      SWMF accepts these either as #AMRCRITERIARESOLUTION with StringRefine=dphi
+      (the convention used in the Liu 2026 pattern) or via #AMRCRITERIALEVEL
+      with explicit Level numbers (the convention used in the shipped FDIPS
+      template). See conventions.yaml for the archetype-specific tie-breaker.
+
+  - id: refinement_shell
+    phrases:
+      - "refinement shell"
+      - "AMR region shell"
+      - "outer corona refinement"
+    commands:
+      - "#AMRREGION.StringShape=shell0"
+    xml_group: "SC:AMR PARAMETERS"
+
+  - id: low_corona_equatorial
+    phrases:
+      - "low-corona equatorial belt"
+      - "active-region refinement"
+      - "near-Sun box"
+    commands:
+      - "#AMRREGION.StringShape=box_gen"
+    xml_group: "SC:AMR PARAMETERS"
+
+  - id: current_sheet_refinement
+    phrases:
+      - "current-sheet AMR"
+      - "refinement on current sheet"
+    commands:
+      - "#AMRCRITERIARESOLUTION.currentsheet"
+    xml_group: "SC:AMR PARAMETERS"
+
+  - id: spherical_genr_grid
+    phrases:
+      - "stretched spherical grid"
+      - "spherical_genr"
+      - "non-uniform radial spacing"
+    commands:
+      - "#GRIDGEOMETRY.TypeGeometry=spherical_genr"
+      - "#GRIDGEOMETRY.NameGridFile"
+    xml_group: "SC:GRID GEOMETRY"

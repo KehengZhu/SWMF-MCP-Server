@@ -1,0 +1,41 @@
+# Crosswalks for chromospheric, outer-boundary, and axis boundary conditions.
+crosswalks:
+
+  - id: chromospheric_density
+    phrases:
+      - "chromospheric base density"
+      - "chromosphere density"
+      - "NchromoSi"
+    commands:
+      - "#CHROMOBC.NchromoSi"
+      - "#CHROMOBC.TchromoSi"
+    xml_group: "SC:USER INPUT"
+    notes: >
+      Lives inside #USERINPUTBEGIN/#USERINPUTEND. Paper-supplied values; do
+      NOT default from corpus envelopes — they vary by solar cycle phase.
+
+  - id: outer_boundary_type
+    phrases:
+      - "outer boundary condition"
+      - "user outer boundary"
+      - "float boundary"
+    commands:
+      - "#OUTERBOUNDARY.TypeBc1"
+      - "#OUTERBOUNDARY.TypeBc2"
+    xml_group: "SC:OUTER BOUNDARY CONDITION"
+    notes: >
+      Six TypeBc slots for the six rectangular-coordinate faces, but in
+      spherical_genr only Bc1 (inner radial) and Bc2 (outer radial) carry
+      physical meaning; Bc3-Bc6 default to "float" (sometimes "periodic" in
+      legacy templates). Conventions differ between the FDIPS reference and
+      the SWMFSOLAR pattern — see conventions.yaml.
+
+  - id: axis_treatment
+    phrases:
+      - "coarse axis"
+      - "axis pole smoothing"
+      - "polar axis dissipation"
+    commands:
+      - "#COARSEAXIS.UseCoarseAxis"
+      - "#COARSEAXIS.nCoarseLayer"
+    xml_group: "SC:GRID GEOMETRY"

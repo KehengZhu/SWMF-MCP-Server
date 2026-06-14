@@ -41,8 +41,8 @@ for a Mermaid diagram:
 ## Tool Protocol
 
 For output inventory:
-```
-inspect_artifact(artifact_type="run_dir", path=<run_dir>)
+```bash
+swmf inspect --type run_dir --path <run_dir>
 ```
 Call this first for any run-directory or postprocessing task. Treat
 `run_dir_layout`, `postproc_state`, `component_artifact_inventory`,
@@ -58,41 +58,41 @@ Do not directly read runlogs, `PARAM.in`, or component directories before this
 tool evidence unless the result reports missing/unreadable evidence or the user
 asks for raw content. Clear runtime failures belong to `swmf-debug`; keep
 postprocessing interpretation in this skill.
-If deeper runlog investigation is needed, call
-`inspect_artifact(artifact_type="runlog", path=<runlog>)` on a listed runlog.
+If deeper runlog investigation is needed, run
+`swmf inspect --type runlog --path <runlog>` on a listed runlog.
 Never open or parse SWMF output files (`.out`, `.outs`, `.idl`, `.sav`, `.tec`,
 `.dat`, etc.) with common command-line tools such as `cat`, `head`, `tail`,
 `grep`, or ad hoc Python readers. Use the SWMF/IDL postprocessing scripts and
 procedures selected from evidence.
 
 For IDL procedures:
-```
-get_evidence(query=<procedure-or-task>, mode="keyword", goal="IDL procedure signature and usage")
+```bash
+swmf get-evidence --query <procedure-or-task> --mode keyword --goal "IDL procedure signature and usage"
 ```
 For IDL workflow detail:
-```
-get_evidence(query=<func/plotmode/transform/export term>, mode="keyword", goal="IDL visualization manual detail")
+```bash
+swmf get-evidence --query <func/plotmode/transform/export term> --mode keyword --goal "IDL visualization manual detail"
 ```
 If a run directory or output file is named:
-```
-inspect_artifact(artifact_type="run_dir"|"result", path=<path>)
+```bash
+swmf inspect --type run_dir|result --path <path>
 ```
 
-Use only the files or procedures named by the v2 result for any direct reads.
+Use only the files or procedures named by the swmf CLI result for any direct reads.
 
 For coupling architecture:
-```
-get_context(question=<coupling question>, task_type="architecture")
+```bash
+swmf get-context --question <coupling question> --task-type architecture
 ```
 Precision follow-up:
+```bash
+swmf get-evidence --mode keyword --goal "coupling registry detail"
 ```
-get_evidence(mode="keyword", goal="coupling registry detail")
-```
-Use only the files or symbols named by the v2 result for any direct reads.
+Use only the files or symbols named by the swmf CLI result for any direct reads.
 
 For postprocess failure:
-```
-inspect_artifact(artifact_type="log"|"run_dir", path=...)
+```bash
+swmf inspect --type log|run_dir --path ...
 ```
 Do not directly read whole runlogs unless the user explicitly requests raw log
 content; after inspection, use only bounded excerpts needed to verify findings.
@@ -109,7 +109,7 @@ from `RESULTS/<name>/`, a component directory, the SWMF source tree, or
 
 Before suggesting or running either script:
 
-1. Call `inspect_artifact(artifact_type="run_dir", path=<path>)`.
+1. Run `swmf inspect --type run_dir --path <path>`.
 2. Use `run_dir_layout` and `status_markers` to identify the live run directory.
 3. If the inspected path is `postprocessed_results_tree`, `restart_tree`, or
    `component_dir`, do not treat it as the command cwd. Find the associated live
@@ -152,13 +152,13 @@ or adding includes, remain a separate run-setup step.
 ## Authority Order
 
 1. Direct tool output tied to source files or runtime artifacts
-2. Deterministic IDL catalog evidence returned by `get_evidence`
-3. Direct source/doc reads from `share/IDL`, `docs/idl.md`, coupling sources, output artifacts named by v2 tools
+2. Deterministic IDL catalog evidence returned by `swmf get-evidence`
+3. Direct source/doc reads from `share/IDL`, `docs/idl.md`, coupling sources, output artifacts named by the swmf CLI
 4. Heuristic source evidence
 
-Never let heuristic search override direct v2 artifact evidence.
+Never let heuristic search override direct swmf CLI artifact evidence.
 For coupling precision follow-up:
+```bash
+swmf get-evidence --mode keyword --goal "coupling registry detail"
 ```
-get_evidence(mode="keyword", goal="coupling registry detail")
-```
-Use only the files or symbols named by the v2 result for any direct reads.
+Use only the files or symbols named by the swmf CLI result for any direct reads.

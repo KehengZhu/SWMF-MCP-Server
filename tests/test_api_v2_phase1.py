@@ -55,7 +55,6 @@ class TestGetContext:
     def test_importable(self) -> None:
         mod = _import_tool("get_context")
         assert hasattr(mod, "get_context")
-        assert hasattr(mod, "register")
 
     def test_signature_has_required_params(self) -> None:
         mod = _import_tool("get_context")
@@ -110,7 +109,6 @@ class TestGetEvidence:
     def test_importable(self) -> None:
         mod = _import_tool("get_evidence")
         assert hasattr(mod, "get_evidence")
-        assert hasattr(mod, "register")
 
     def test_signature_has_required_params(self) -> None:
         mod = _import_tool("get_evidence")
@@ -125,14 +123,18 @@ class TestGetEvidence:
         assert "mode_used" in result["provenance"]
         assert "scope" in result["provenance"]
 
-    def test_invalid_mode_defaults_to_hybrid(self) -> None:
+    def test_invalid_mode_coerced_to_keyword(self) -> None:
+        # Semantic/hybrid retrieval has been removed; any non-keyword mode
+        # is silently coerced to "keyword".
         result = self._call(query="test", mode="not_valid")
-        assert result["mode"] == "hybrid"
+        assert result["mode"] == "keyword"
 
-    def test_valid_modes(self) -> None:
+    def test_legacy_modes_coerced_to_keyword(self) -> None:
+        # Skills authored against the old API may still send hybrid/semantic;
+        # the server now coerces every value to keyword.
         for mode in ("hybrid", "keyword", "semantic"):
             result = self._call(query="test", mode=mode)
-            assert result["mode"] == mode
+            assert result["mode"] == "keyword"
 
     def test_top_k_clamped(self) -> None:
         result_low = self._call(query="test", top_k=0)
@@ -381,7 +383,6 @@ class TestInspectArtifact:
     def test_importable(self) -> None:
         mod = _import_tool("inspect_artifact")
         assert hasattr(mod, "inspect_artifact")
-        assert hasattr(mod, "register")
 
     def test_signature_has_required_params(self) -> None:
         mod = _import_tool("inspect_artifact")
@@ -900,7 +901,6 @@ class TestCompareArtifacts:
     def test_importable(self) -> None:
         mod = _import_tool("compare_artifacts")
         assert hasattr(mod, "compare_artifacts")
-        assert hasattr(mod, "register")
 
     def test_signature_has_required_params(self) -> None:
         mod = _import_tool("compare_artifacts")
@@ -943,25 +943,6 @@ class TestCompareArtifacts:
         assert result["comparison_type"] == "param"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Removal gate: no legacy swmf_* tools exposed on server surface
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_no_legacy_tools_exposed_on_server() -> None:
-    """Removal gate: server.py must not export any swmf_* callable after cutover."""
-    server = importlib.import_module("swmf_mcp_server.server")
-
-    legacy_names = [
-        name
-        for name in dir(server)
-        if name.startswith("swmf_") and callable(getattr(server, name))
-    ]
-    assert legacy_names == [], (
-        "Legacy tools still exported from server.py. Remove before cutover:\n"
-        + "\n".join(f"  - {t}" for t in sorted(legacy_names))
-    )
-
-
 def test_schema_document_exists() -> None:
     schema_path = Path(__file__).parents[1] / "docs" / "api_v2_schema.yaml"
     assert schema_path.is_file(), "docs/api_v2_schema.yaml must exist"
@@ -1000,4 +981,4 @@ def test_four_public_tool_modules_exist() -> None:
     ):
         mod = _import_tool(mod_name)
         assert mod is not None
-        assert hasattr(mod, "register"), f"{mod_name} must expose a register() function"
+        assert hasattr(mod, mod_name), f"{mod_name} must expose its {mod_name}() tool function"

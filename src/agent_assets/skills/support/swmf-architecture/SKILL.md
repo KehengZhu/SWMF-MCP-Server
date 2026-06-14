@@ -25,30 +25,28 @@ Not in scope: PARAM semantics, build steps, failure diagnosis.
 
 ## Tool Protocol
 
-```
-get_context(
-  question = <architecture question>,
-  scope = [<components if named>],
-  task_type = "architecture",
-  detail = "normal"   # use "deep" for multi-component ambiguous questions
-)
+```bash
+swmf get-context \
+  --question "<architecture question>" \
+  --scope <components if named> \
+  --task-type architecture \
+  --detail normal   # use "deep" for multi-component ambiguous questions
 ```
 
 Then for each key entity returned:
-```
-get_evidence(
-  query = <entity>,
-  mode = "hybrid",
-  scope = [<component>],
-  top_k = 8,
-  goal = "architecture explanation"
-)
+```bash
+swmf get-evidence \
+  --query "<entity>" \
+  --mode hybrid \
+  --scope <component> \
+  --top-k 8 \
+  --goal "architecture explanation"
 ```
 
 Precision follow-up:
-* `get_evidence(mode="keyword", goal="coupling registry detail")` on the specific
-  coupling symbols or files returned by `get_context`
-* direct source reads only for files named by the v2 tool output
+* `swmf get-evidence --mode keyword --goal "coupling registry detail"` on the specific
+  coupling symbols or files returned by `swmf get-context`
+* direct source reads only for files named by the swmf CLI output
 
 ## Output Contract
 

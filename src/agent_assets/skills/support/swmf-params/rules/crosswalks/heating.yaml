@@ -1,0 +1,62 @@
+# Crosswalks for coronal heating, wave dissipation, transition-region physics.
+crosswalks:
+
+  - id: stochastic_heating
+    phrases:
+      - "stochastic heating"
+      - "Chandran stochastic heating"
+      - "Chandran et al. 2010 stochastic heating"
+    commands:
+      - "#HEATPARTITIONING.TypeHeatPartitioning=stochasticheating"
+      - "#HEATPARTITIONING.StochasticExponent"
+      - "#HEATPARTITIONING.StochasticAmplitude"
+    xml_group: "SC:CORONAL HEATING"
+
+  - id: turbulent_cascade_heating
+    phrases:
+      - "turbulent cascade"
+      - "Kolmogorov cascade dissipation"
+      - "Lperp sqrt B"
+    commands:
+      - "#CORONALHEATING.TypeCoronalHeating=turbulentcascade"
+      - "#CORONALHEATING.LperpTimesSqrtBSi"
+    xml_group: "SC:CORONAL HEATING"
+
+  - id: wave_reflection
+    phrases:
+      - "wave reflection"
+      - "surface wave reflection"
+      - "Reynolds decomposition wave reflection"
+    commands:
+      - "#CORONALHEATING.rMinWaveReflection"
+      - "#CORONALHEATING.UseSurfaceWaveRefl"
+      - "#CORONALHEATING.UseReynoldsDecomposition"
+    xml_group: "SC:CORONAL HEATING"
+    notes: >
+      Several reflection mechanisms exist; the paper's wording determines
+      which switch fires. UseSurfaceWaveRefl is the boundary reflection at
+      r=rMinWaveReflection; UseReynoldsDecomposition turns on the bulk
+      decomposition. Read the commandgroup to see the relationship.
+
+  - id: poynting_flux_norm
+    phrases:
+      - "Poynting flux per unit magnetic field"
+      - "Poynting flux normalization"
+      - "PoyntingFluxPerBSi"
+    commands:
+      - "#POYNTINGFLUX.PoyntingFluxPerBSi"
+    xml_group: "SC:CORONAL HEATING"
+    notes: >
+      Paper-supplied scalar; agent must use the value the paper provides.
+      No default in rules — flag as gap if paper does not supply.
+
+  - id: transition_region_extension
+    phrases:
+      - "extended transition region"
+      - "TR broadening"
+      - "DoExtendTransitionRegion"
+    commands:
+      - "#TRANSITIONREGION.DoExtendTransitionRegion"
+      - "#TRANSITIONREGION.TeTransitionRegionSi"
+      - "#TRANSITIONREGION.DeltaTeModSi"
+    xml_group: "SC:CORONAL HEATING"

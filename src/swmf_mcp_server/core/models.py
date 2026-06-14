@@ -78,6 +78,8 @@ class CommandMetadata:
     source_kind: str = "PARAM.XML"
     source_path: str | None = None
     authority: Authority = "authoritative"
+    commandgroup: str | None = None  # name of enclosing <commandgroup> in PARAM.XML
+    parameters: list[dict[str, Any]] = field(default_factory=list)  # parsed <parameter> children
 
 
 @dataclass
@@ -98,6 +100,9 @@ class SourceCatalog:
     source_files: list[str]
     idl_procedures: dict[str, dict[str, Any]] = field(default_factory=dict)
     resolution_notes: list[str] = field(default_factory=list)
+    # Reverse index: "{COMPONENT}:{commandgroup_name}" -> list of normalized command names.
+    # Used by inspect_artifact(xml_scope="commandgroup:...") and the XML audit gate.
+    commandgroup_to_commands: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass

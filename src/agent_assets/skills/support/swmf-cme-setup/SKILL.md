@@ -44,11 +44,11 @@ Not in scope: PARAM validation (defer to `swmf-params`); magnetogram input handl
    * `defaults/cme_eruption.yaml` — SPHEROMAK shape, ops guards, couple cadence.
    * `defaults/session_ladders.yaml` — iteration counts.
 4. Schema lookups via:
+   ```bash
+   swmf get-evidence --query "#CME" --mode keyword --goal "param definition"
    ```
-   get_evidence(query="#CME", mode="keyword", goal="param definition")
-   ```
-   ```
-   get_evidence(query="GL flux rope", task_type="configuration", goal="CME initiation")
+   ```bash
+   swmf get-evidence --query "GL flux rope" --task-type configuration --goal "CME initiation"
    ```
 5. Direct reads only of files named by evidence
    (`SWMFSOLAR/Param/PARAM.in.awsomr.CME`,

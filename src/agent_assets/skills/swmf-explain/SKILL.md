@@ -23,9 +23,9 @@ description: "Use when the question is broad, conceptual, cross-component, or as
 
 ## Evidence order
 
-1. `get_context(question=..., task_type="architecture", detail="normal")`
+1. `swmf get-context --question ... --task-type architecture --detail normal`
    — orientation, entities, relevant components and files
-2. `get_evidence(mode="hybrid", query=<entity>, goal="architecture explanation")`
+2. `swmf get-evidence --mode keyword --query <entity> --goal "architecture explanation"`
    — grounding for each key entity from Step 1
 3. Read specific files only from paths returned in evidence
 4. Grep: only if Steps 1–2 both miss a specific named token; restrict to evidence paths

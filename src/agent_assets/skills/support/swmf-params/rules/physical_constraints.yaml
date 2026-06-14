@@ -1,7 +1,7 @@
 # Physical-constraint validation rules for PARAM.in.
 #
-# Evaluated by `inspect_artifact(artifact_type="param", check_rules=True)`.
-# Append-only: add new rules here without touching MCP code.
+# Evaluated by `swmf inspect --type param --check-rules`.
+# Append-only: add new rules here without touching swmf CLI code.
 #
 # Schema (per rule):
 #   id            - unique short slug

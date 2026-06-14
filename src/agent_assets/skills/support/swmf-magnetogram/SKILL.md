@@ -32,33 +32,26 @@ analysis; arbitrary FITS science processing.
 
 For one named magnetogram:
 
-```
-inspect_artifact(
-  artifact_type = "magnetogram",
-  path = <fits_or_map_or_harmonics>
-)
+```bash
+swmf inspect --type magnetogram --path <fits_or_map_or_harmonics>
 ```
 
 For locating a download entrypoint when no file is named:
 
-```
-get_evidence(
-  query = "magnetogram",
-  task_type = "configuration",
-  goal = "magnetogram entrypoint and file conventions"
-)
+```bash
+swmf get-evidence --query "magnetogram" --task-type configuration --goal "magnetogram entrypoint and file conventions"
 ```
 
-The skill calls inspect first whenever a candidate file exists locally; it falls back to
-`get_evidence` only when no file is named or when the user asks "where do I get one."
+The skill runs `swmf inspect` first whenever a candidate file exists locally; it falls back to
+`swmf get-evidence` only when no file is named or when the user asks "where do I get one."
 
 ## Authority Order
 
-1. `inspect_artifact(artifact_type="magnetogram")` — FITS header + filename pattern.
+1. `swmf inspect --type magnetogram` — FITS header + filename pattern.
 2. Filename pattern alone, when the file head bytes are not parseable. The GONG-style
    pattern is `mr<series>qs<YYMMDD>t<HHMM>c<CR>_<long0>.{fits,fts}`; ADAPT files start
    with `adapt`; HMI files start with `hmi.`; MDI files with `synop_Mr_`.
-3. `get_evidence(task_type="configuration")` for entrypoints and conventions.
+3. `swmf get-evidence --task-type configuration` for entrypoints and conventions.
 4. `SWMFSOLAR/Scripts/download_ADAPT.py` and `change_awsom_param.py` for the operational
    acquisition + alignment workflow.
 

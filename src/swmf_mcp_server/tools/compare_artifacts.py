@@ -80,7 +80,7 @@ Example response
     "right": "run_modified/PARAM.in",
     "comparison_type": "param"
   },
-  "uncertainty": {"known_unknowns": ["semantic impact not evaluated"]}
+  "uncertainty": {"known_unknowns": ["physical impact of value changes not evaluated"]}
 }
 
 Field semantics
@@ -410,14 +410,3 @@ def compare_artifacts(
         },
     }
     return with_root(payload, root)
-
-
-def register(app: Any) -> None:
-    app.tool(
-        description=(
-            "Compare two local SWMF artifacts and return structured differences. "
-            "Supports PARAM.in files, run outputs, logs, and generated artifacts. "
-            "comparison_type must be one of: 'param', 'log', 'run_dir', 'result', 'text'. "
-            "If omitted, the type is inferred from file extensions."
-        )
-    )(compare_artifacts)

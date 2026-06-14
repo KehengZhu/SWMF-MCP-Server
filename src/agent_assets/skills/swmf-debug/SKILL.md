@@ -22,31 +22,31 @@ description: "Use when something is broken or suspicious: run crash, wrong resul
 ## Evidence order
 
 1. **Inspect artifact first** — always start from the failure artifact:
-   ```
-   inspect_artifact(artifact_type="log",     path=<log>)                   # crashes, runtime errors
-   inspect_artifact(artifact_type="param",   path=<PARAM.in>, check_rules=True)  # input failures
-   inspect_artifact(artifact_type="run_dir", path=<run_dir>)                # layout/startup
+   ```bash
+   swmf inspect --type log     --path <log>                   # crashes, runtime errors
+   swmf inspect --type param   --path <PARAM.in> --check-rules  # input failures
+   swmf inspect --type run_dir --path <run_dir>                # layout/startup
    ```
    Read `findings`. Identify the failure family. The param inspector returns
    structural primitives plus rule-violation evidence; for intent reasoning
    about the failing PARAM (which command misfired in which session), read
    the PARAM.in file directly after this step.
    Do not directly read whole runlogs unless the user explicitly requests raw
-   log content; use only bounded follow-up excerpts after `inspect_artifact`.
+   log content; use only bounded follow-up excerpts after `swmf inspect`.
 
 2. **Cross-component orientation** (only if failure spans components):
-   ```
-   get_context(question=<failure summary>, scope=[<components>], task_type="debug")
+   ```bash
+   swmf get-context --question "<failure summary>" --scope <components> --task-type debug
    ```
 
 3. **Source grounding** after failure family is known:
-   ```
-   get_evidence(query=<symbol or error token>, mode="hybrid", goal="root cause of <family>")
+   ```bash
+   swmf get-evidence --query "<symbol or error token>" --mode keyword --goal "root cause of <family>"
    ```
 
 4. **Regression comparison** (when user says "it worked before"):
-   ```
-   compare_artifacts(left=<baseline>, right=<modified>, comparison_type="log"|"param")
+   ```bash
+   swmf compare --left <baseline> --right <modified> --comparison-type log|param
    ```
 
 ## Failure families

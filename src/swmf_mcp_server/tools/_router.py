@@ -133,26 +133,15 @@ def run_evidence_search(
     top_k: int,
     goal: str,
 ) -> tuple[list[dict[str, Any]], str, str, str | None]:
-    """Run search and return (evidence_items, mode_used, summary, degraded_reason).
+    """Run keyword search and return (evidence_items, mode_used, summary, degraded_reason).
 
-    Routing rules
-    -------------
-    - mode="keyword"  → prefer symbol lookup + keyword FTS (never semantic)
-    - mode="semantic" → semantic only (falls back to keyword if unavailable)
-    - mode="hybrid"   → auto-detect via query understanding, then hybrid
-
-    Scope is honoured by passing component= to the backend when exactly one
-    component is given, or by post-filtering when multiple are given.
+    Semantic / hybrid retrieval has been removed; the `mode` argument is kept
+    for backward compatibility with skill prompts but every search now uses
+    the catalog's keyword (BM25) backend. Scope is honoured by passing
+    component= to the backend when exactly one component is given, or by
+    post-filtering when multiple are given.
     """
     query_analysis = ks.understand_source_query(query)
-
-    # For "hybrid" mode, let query understanding suggest the actual mode
-    if mode == "hybrid":
-        preferred = query_analysis.get("preferred_search_mode", "keyword")
-        effective_requested_mode = preferred if preferred else "hybrid"
-    else:
-        effective_requested_mode = mode
-
     index_ready, degraded_reason = _check_index(swmf_root)
 
     component_filter: str | None = scope[0] if len(scope) == 1 else None
@@ -162,15 +151,14 @@ def run_evidence_search(
         query=query,
         component=component_filter,
         max_results=top_k,
-        search_mode=effective_requested_mode,
         ensure_ready=False,
     )
 
     results: list[dict[str, Any]] = raw_payload.get("results", [])
-    mode_used: str = raw_payload.get("search_method", effective_requested_mode)
+    mode_used: str = raw_payload.get("search_method", "keyword")
 
     # If no results, try focus terms from query analysis
-    if not results and mode != "semantic":
+    if not results:
         for term in query_analysis.get("focus_terms", []):
             if term == query:
                 continue
@@ -179,7 +167,6 @@ def run_evidence_search(
                 query=term,
                 component=component_filter,
                 max_results=top_k,
-                search_mode="keyword",
                 ensure_ready=False,
             )
             if fallback.get("results"):

@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
-"""Generate project-local MCP install outputs for one supported agent surface.
+"""Generate project-local install outputs for one supported agent surface.
 
 Called by ``make install``. Reads configuration from environment variables set
 by the Makefile:
   AGENT           - target agent name
   TARGET_DIR      - directory where install outputs are written
-  SERVER_PYTHON   - absolute path to the Python interpreter embedded in configs
+  SERVER_PYTHON   - absolute path to the Python interpreter in the project venv
+                    (the ``swmf`` console script lives next to it)
   SWMF_ROOT       - absolute path to the SWMF source tree
   SWMF_IDL_EXEC   - optional absolute path to the IDL executable
   SWMFSOLAR_ROOT  - optional absolute path to the SWMFSOLAR source tree
+
+There is no MCP server anymore. Instead install writes:
+  1. A self-contained ``swmf`` launcher (a shell wrapper that bakes in SWMF_ROOT
+     and friends, then execs the venv ``swmf`` console script).
+  2. An agent instruction file = a generated header naming the launcher's
+     absolute path, followed by the shared SWMF discipline.
+  3. A symlink of the skill tree into the agent's skills directory.
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
-from typing import Any
 
 
-SERVER_NAME = "swmf-prototype"
+PROJECT_NAME = "swmf-ai"
 SUPPORTED_AGENTS = ("claude", "copilot-vscode", "copilot-cli", "codex")
 AGENT_ALIASES = {
     "claude-code": "claude",
@@ -52,29 +59,6 @@ def _installed_repo_dir(target_dir: Path, repo_root: Path) -> Path:
     return target_dir / ".swmf_mcp_server"
 
 
-def _write_json(path: Path, content: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(content, indent=2) + "\n", encoding="utf-8")
-
-
-def _toml_quote(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def _render_codex_toml(command: str, args: list[str], cwd: Path, env: dict[str, str]) -> str:
-    lines = [
-        f"[mcp_servers.{SERVER_NAME}]",
-        f"command = {_toml_quote(command)}",
-        f"args = [{', '.join(_toml_quote(arg) for arg in args)}]",
-        f"cwd = {_toml_quote(str(cwd))}",
-        "",
-        f"[mcp_servers.{SERVER_NAME}.env]",
-    ]
-    lines.extend(f"{key} = {_toml_quote(value)}" for key, value in env.items())
-    return "\n".join(lines) + "\n"
-
-
 def _remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
@@ -90,19 +74,6 @@ def _symlink_skill_tree(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     relative_source = Path(os.path.relpath(source, start=destination.parent))
     destination.symlink_to(relative_source, target_is_directory=True)
-
-
-def _symlink_file(source: Path, destination: Path) -> None:
-    if destination.exists() or destination.is_symlink():
-        try:
-            if destination.resolve() == source.resolve():
-                return
-        except FileNotFoundError:
-            pass
-    _remove_path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    relative_source = Path(os.path.relpath(source, start=destination.parent))
-    destination.symlink_to(relative_source)
 
 
 def normalize_agent_name(raw_agent: str) -> str:
@@ -127,18 +98,6 @@ def instruction_destination_for_agent(agent: str, target_dir: Path) -> Path:
         return target_dir / ".github" / "copilot-instructions.md"
     if agent == "codex":
         return target_dir / "AGENTS.md"
-    raise ValueError(f"Unsupported agent: {agent}")
-
-
-def config_destination_for_agent(agent: str, target_dir: Path) -> Path:
-    if agent == "claude":
-        return target_dir / ".mcp.json"
-    if agent == "copilot-vscode":
-        return target_dir / ".vscode" / "mcp.json"
-    if agent == "copilot-cli":
-        return target_dir / ".mcp.json"
-    if agent == "codex":
-        return target_dir / ".codex" / "config.toml"
     raise ValueError(f"Unsupported agent: {agent}")
 
 
@@ -172,7 +131,7 @@ def resolve_swmfsolar_root(
     return None, "not found in auto-detect search paths"
 
 
-def build_server_env(
+def build_cli_env(
     swmf_root: Path,
     swmf_idl_exec: str,
     swmfsolar_root: Path | None,
@@ -185,81 +144,79 @@ def build_server_env(
     return env
 
 
-def build_claude_config(server_python: str, env: dict[str, str]) -> dict[str, Any]:
-    return {
-        "mcpServers": {
-            SERVER_NAME: {
-                "command": server_python,
-                "args": ["-m", "swmf_mcp_server.server"],
-                "env": env,
-            }
-        }
-    }
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
-def build_vscode_config(server_python: str, cwd: Path, env: dict[str, str]) -> dict[str, Any]:
-    return {
-        "servers": {
-            SERVER_NAME: {
-                "type": "stdio",
-                "command": server_python,
-                "args": ["-m", "swmf_mcp_server.server"],
-                "cwd": str(cwd),
-                "env": env,
-            }
-        }
-    }
+def write_launcher(target_dir: Path, venv_swmf: Path, env: dict[str, str]) -> Path:
+    """Write a self-contained ``swmf`` launcher and return its path.
+
+    The launcher exports SWMF_ROOT (and friends) before exec'ing the venv
+    ``swmf`` console script, so the agent can invoke the CLI without any
+    environment setup or ``--swmf-root`` flags.
+    """
+    launcher_path = target_dir / ".swmf_ai" / "swmf"
+    launcher_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "#!/bin/sh",
+        "# Generated by swmf-mcp-prototype `make install`. Do not edit by hand.",
+    ]
+    lines.extend(f"export {key}={_sh_quote(value)}" for key, value in env.items())
+    lines.append(f"exec {_sh_quote(str(venv_swmf))} \"$@\"")
+    launcher_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    launcher_path.chmod(launcher_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return launcher_path
 
 
-def build_copilot_cli_config(server_python: str, cwd: Path, env: dict[str, str]) -> dict[str, Any]:
-    return {
-        "mcpServers": {
-            SERVER_NAME: {
-                "type": "stdio",
-                "command": server_python,
-                "args": ["-m", "swmf_mcp_server.server"],
-                "cwd": str(cwd),
-                "env": env,
-                "tools": ["*"],
-            }
-        }
-    }
+def _instruction_header(launcher_path: Path, env: dict[str, str]) -> str:
+    extra = "".join(
+        f"#   {key}={value}\n"
+        for key, value in env.items()
+        if key != "SWMF_ROOT"
+    )
+    return (
+        "# SWMF AI\n"
+        "\n"
+        "This workspace is configured for SWMF AI. Use the local `swmf` CLI for all\n"
+        "SWMF retrieval and artifact inspection. The skills below refer to the CLI as\n"
+        "`swmf`; invoke it with this absolute path:\n"
+        "\n"
+        f"    {launcher_path}\n"
+        "\n"
+        f"Example: `{launcher_path} get-context --question \"How does GM couple to IE?\"`.\n"
+        "\n"
+        f"`SWMF_ROOT={env.get('SWMF_ROOT', '')}` (and any IDL/SWMFSOLAR paths) are baked\n"
+        "into that launcher, so you never need to pass `--swmf-root`. Subcommands:\n"
+        "`get-context`, `get-evidence`, `inspect`, `compare`, `index`.\n"
+        + (("#\n# Also configured:\n" + extra) if extra else "")
+        + "\n---\n\n"
+    )
+
+
+def write_instruction_file(
+    instruction_path: Path,
+    launcher_path: Path,
+    env: dict[str, str],
+) -> None:
+    discipline = _shared_discipline_source().read_text(encoding="utf-8")
+    instruction_path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_path(instruction_path)
+    instruction_path.write_text(_instruction_header(launcher_path, env) + discipline, encoding="utf-8")
 
 
 def write_agent_install(
     agent: str,
     target_dir: Path,
-    server_python: str,
-    installed_repo_dir: Path,
+    venv_swmf: Path,
     env: dict[str, str],
 ) -> tuple[Path, Path, Path]:
-    config_path = config_destination_for_agent(agent, target_dir)
     skills_path = skill_destination_for_agent(agent, target_dir)
     instruction_path = instruction_destination_for_agent(agent, target_dir)
 
-    if agent == "claude":
-        _write_json(config_path, build_claude_config(server_python, env))
-    elif agent == "copilot-vscode":
-        _write_json(config_path, build_vscode_config(server_python, installed_repo_dir, env))
-    elif agent == "copilot-cli":
-        _write_json(config_path, build_copilot_cli_config(server_python, installed_repo_dir, env))
-    elif agent == "codex":
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            _render_codex_toml(
-                command=server_python,
-                args=["-m", "swmf_mcp_server.server"],
-                cwd=installed_repo_dir,
-                env=env,
-            ),
-            encoding="utf-8",
-        )
-    else:
-        raise ValueError(f"Unsupported agent: {agent}")
-
-    _symlink_file(_shared_discipline_source(), instruction_path)
+    launcher_path = write_launcher(target_dir, venv_swmf, env)
+    write_instruction_file(instruction_path, launcher_path, env)
     _symlink_skill_tree(_skills_source_root(), skills_path)
-    return config_path, skills_path, instruction_path
+    return launcher_path, skills_path, instruction_path
 
 
 def main() -> int:
@@ -298,24 +255,28 @@ def main() -> int:
     target_path.mkdir(parents=True, exist_ok=True)
 
     swmf_path = Path(swmf_root).resolve()
-    installed_repo_dir = _installed_repo_dir(target_path, repo_root)
     swmfsolar_path, swmfsolar_note = resolve_swmfsolar_root(
         explicit_value=explicit_swmfsolar_root,
         swmf_root=swmf_path,
         repo_root=repo_root,
         target_dir=target_path,
     )
-    env = build_server_env(
+    env = build_cli_env(
         swmf_root=swmf_path,
         swmf_idl_exec=swmf_idl_exec,
         swmfsolar_root=swmfsolar_path,
     )
 
-    config_path, skills_path, instruction_path = write_agent_install(
+    # The `swmf` console script sits next to the venv interpreter. Do NOT
+    # resolve() first: the venv python is typically a symlink to the base
+    # interpreter, and resolving it would point us at the base bin/ instead of
+    # the venv bin/ where the `swmf` console script lives.
+    venv_swmf = Path(server_python).expanduser().with_name("swmf")
+
+    launcher_path, skills_path, instruction_path = write_agent_install(
         agent=agent,
         target_dir=target_path,
-        server_python=server_python,
-        installed_repo_dir=installed_repo_dir,
+        venv_swmf=venv_swmf,
         env=env,
     )
 
@@ -323,16 +284,15 @@ def main() -> int:
     print(f"    SWMF_ROOT                : {swmf_path}")
     print(
         "    SWMF_IDL_EXEC            : "
-        f"{env.get('SWMF_IDL_EXEC', '(not set - omitted from generated config)')}"
+        f"{env.get('SWMF_IDL_EXEC', '(not set - omitted from launcher)')}"
     )
     print(
         "    SWMFSOLAR_ROOT           : "
         f"{env.get('SWMFSOLAR_ROOT', '(not written - ' + swmfsolar_note + ')')}"
     )
-    print(f"    Runtime Python           : {server_python}")
-    print(f"    Runtime cwd              : {installed_repo_dir}")
-    print(f"    Config written           : {config_path}")
-    print(f"    Instruction symlink      : {instruction_path}")
+    print(f"    CLI console script       : {venv_swmf}")
+    print(f"    Launcher written         : {launcher_path}")
+    print(f"    Instruction file written : {instruction_path}")
     print(f"    Skills symlink           : {skills_path}")
     print("==> Agent install ready.")
     return 0

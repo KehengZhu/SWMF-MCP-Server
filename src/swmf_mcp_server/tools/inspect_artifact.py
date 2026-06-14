@@ -1363,7 +1363,6 @@ def _inspect_param(
             swmf_root,
             query=question,
             max_results=5,
-            search_mode="keyword",
             ensure_ready=False,
         )
         evidence = [raw_result_to_evidence_item(r) for r in raw.get("results", [])]
@@ -1381,17 +1380,78 @@ def _inspect_param(
 # xml inspector
 # ---------------------------------------------------------------------------
 
-def _inspect_xml(path_str: str, question: str) -> tuple[str, list[dict[str, Any]]]:
+def _command_to_payload(cmd: Any) -> dict[str, Any]:
+    return {
+        "name": cmd.normalized,
+        "component": cmd.component,
+        "commandgroup": cmd.commandgroup,
+        "description": cmd.description,
+        "defaults": cmd.defaults,
+        "allowed_values": cmd.allowed_values,
+        "ranges": cmd.ranges,
+        "parameters": cmd.parameters,
+    }
+
+
+def _parse_xml_scope(xml_scope: str | None) -> tuple[str, str]:
+    """Return (mode, value). Mode is one of 'command', 'commandgroup',
+    'raw_span', or 'all' (default when xml_scope is None or unrecognized).
+    """
+    if not xml_scope:
+        return ("all", "")
+    raw = xml_scope.strip()
+    for prefix, mode in (
+        ("command:", "command"),
+        ("commandgroup:", "commandgroup"),
+        ("raw_span:", "raw_span"),
+    ):
+        if raw.lower().startswith(prefix):
+            return (mode, raw[len(prefix):].strip())
+    return ("all", "")
+
+
+def _inspect_xml(
+    path_str: str,
+    question: str,
+    xml_scope: str | None = None,
+    session_id: str | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     p = Path(path_str)
 
-    # Use the actual XML parser to extract commands
-    component: str | None = None
     # Infer component from path (e.g. GM/BATSRUS/PARAM.XML → "GM")
-    parts = p.parts
-    for i, part in enumerate(parts):
-        if part.upper() in {"GM", "IE", "SC", "IH", "OH", "UA", "RB", "SP", "IM", "PW"}:
+    component: str | None = None
+    for part in p.parts:
+        if part.upper() in {"GM", "IE", "SC", "IH", "OH", "UA", "RB", "SP", "IM", "PW", "PC", "PT", "MM", "EE"}:
             component = part.upper()
             break
+
+    scope_mode, scope_value = _parse_xml_scope(xml_scope)
+
+    # raw_span mode does not need the parsed catalog — just read the file lines.
+    if scope_mode == "raw_span":
+        text, err = _read_file_safe(path_str)
+        if err or text is None:
+            return err or "Could not read XML.", []
+        try:
+            start_str, end_str = scope_value.split("-", 1)
+            start_line = max(1, int(start_str.strip()))
+            end_line = max(start_line, int(end_str.strip()))
+        except (ValueError, AttributeError):
+            return f"raw_span requires 'start-end' line range, got '{scope_value}'.", []
+        all_lines = text.splitlines()
+        end_line = min(end_line, len(all_lines))
+        raw_excerpt = "\n".join(all_lines[start_line - 1:end_line])
+        return (
+            f"PARAM.XML at '{path_str}': raw_span lines {start_line}-{end_line}.",
+            [{
+                "kind": "raw_span",
+                "location": path_str,
+                "description": f"Raw XML lines {start_line}-{end_line}.",
+                "line_start": start_line,
+                "line_end": end_line,
+                "raw_xml": raw_excerpt,
+            }],
+        )
 
     commands = parse_param_xml_file(p, component)
 
@@ -1413,6 +1473,88 @@ def _inspect_xml(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
         )
 
     total_commands = len(commands)
+
+    # commandgroup mode: return every command in the named group.
+    if scope_mode == "commandgroup":
+        target = scope_value.strip().upper()
+        matched = [
+            cmd for cmd in commands
+            if (cmd.commandgroup or "").strip().upper() == target
+        ]
+        if not matched:
+            # List the available group names so the agent can correct itself.
+            available = sorted({
+                (cmd.commandgroup or "").strip()
+                for cmd in commands
+                if cmd.commandgroup
+            })
+            return (
+                f"PARAM.XML at '{path_str}': no commands found in commandgroup '{scope_value}'.",
+                [{
+                    "kind": "commandgroup_not_found",
+                    "location": path_str,
+                    "description": f"No commandgroup matching '{scope_value}'.",
+                    "requested_group": scope_value,
+                    "available_groups": available,
+                    "component": component,
+                }],
+            )
+        # Record the commandgroup read in the audit store so the XML audit
+        # gate can verify that every emitted commandgroup was consulted.
+        from ..audit import get_audit_store, record_commandgroup_read
+        record_commandgroup_read(
+            get_audit_store(),
+            session_id=session_id,  # run_dir scopes the gate; persisted to disk.
+            component=component,
+            group_name=matched[0].commandgroup,
+        )
+        return (
+            f"PARAM.XML at '{path_str}': {len(matched)} command(s) in commandgroup '{scope_value}'.",
+            [{
+                "kind": "commandgroup_contents",
+                "location": path_str,
+                "description": f"{len(matched)} command(s) in commandgroup '{scope_value}'.",
+                "commandgroup": scope_value,
+                "component": component,
+                "commands": [_command_to_payload(cmd) for cmd in matched],
+            }],
+        )
+
+    # command mode: exact-or-fuzzy single command lookup.
+    if scope_mode == "command":
+        target = scope_value.upper()
+        if target and not target.startswith("#"):
+            target = "#" + target
+        matched = [cmd for cmd in commands if cmd.normalized.upper() == target]
+        if not matched:
+            # Fall back to substring on raw name
+            needle = scope_value.lower()
+            matched = [
+                cmd for cmd in commands
+                if needle in (cmd.name or "").lower()
+                or needle in (cmd.normalized or "").lower()
+            ]
+        if not matched:
+            return (
+                f"PARAM.XML at '{path_str}': no command matching '{scope_value}'.",
+                [{
+                    "kind": "no_command_match",
+                    "location": path_str,
+                    "description": f"No command matching '{scope_value}'.",
+                    "requested_command": scope_value,
+                }],
+            )
+        return (
+            f"PARAM.XML at '{path_str}': {len(matched)} command(s) matching '{scope_value}'.",
+            [{
+                "kind": "command_matches",
+                "location": path_str,
+                "description": f"{len(matched)} command(s) matching '{scope_value}'.",
+                "matches": [_command_to_payload(cmd) for cmd in matched[:10]],
+            }],
+        )
+
+    # Default ("all") behavior — preserves the old `question`-driven surface.
     command_names = [cmd.normalized for cmd in commands[:80]]
 
     findings: list[dict[str, Any]] = [
@@ -1428,20 +1570,14 @@ def _inspect_xml(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
         }
     ]
 
-    # If question, search for matching commands
     if question:
-        q_norm = question.upper().strip()
-        if not q_norm.startswith("#"):
-            q_norm = "#" + q_norm
         q_lower = question.lower()
-
         matched_cmds = [
             cmd for cmd in commands
             if q_lower in (cmd.name or "").lower()
             or q_lower in (cmd.normalized or "").lower()
         ]
         if not matched_cmds:
-            # fuzzy: any command whose name contains any word from the question
             words = [w for w in q_lower.split() if len(w) > 2]
             matched_cmds = [
                 cmd for cmd in commands
@@ -1453,17 +1589,7 @@ def _inspect_xml(path_str: str, question: str) -> tuple[str, list[dict[str, Any]
                 "kind": "command_matches",
                 "location": path_str,
                 "description": f"{len(matched_cmds)} command(s) matching '{question}'.",
-                "matches": [
-                    {
-                        "name": cmd.normalized,
-                        "component": cmd.component,
-                        "description": cmd.description,
-                        "defaults": cmd.defaults,
-                        "allowed_values": cmd.allowed_values,
-                        "ranges": cmd.ranges,
-                    }
-                    for cmd in matched_cmds[:10]
-                ],
+                "matches": [_command_to_payload(cmd) for cmd in matched_cmds[:10]],
             })
         else:
             findings.append({
@@ -2369,7 +2495,6 @@ def _inspect_run_dir(
             swmf_root,
             query=question,
             max_results=4,
-            search_mode="keyword",
             ensure_ready=False,
         )
         evidence = [raw_result_to_evidence_item(r) for r in raw.get("results", [])]
@@ -2801,6 +2926,114 @@ def _inspect_result(path_str: str, question: str) -> tuple[str, list[dict[str, A
 
 
 # ---------------------------------------------------------------------------
+# param XML audit (consumed when check_xml_audit=True)
+# ---------------------------------------------------------------------------
+
+_XML_AUDIT_WAIVER_RE = re.compile(r"^\s*!\s*xml_audit_waiver\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def _extract_xml_audit_waivers(param_text: str) -> list[str]:
+    """Return the list of group_keys waived in the PARAM REPORT comments.
+
+    The agent declares waivers with single-line comments of the form::
+
+        ! xml_audit_waiver: SC:SCHEME PARAMETERS
+        ! xml_audit_waiver: SC:STAND ALONE MODE  reason text...
+
+    Anything after the second colon up to whitespace is treated as the
+    canonical group_key.
+    """
+    waivers: list[str] = []
+    for raw_line in param_text.splitlines():
+        match = _XML_AUDIT_WAIVER_RE.match(raw_line)
+        if not match:
+            continue
+        body = match.group(1).strip()
+        # Take the first whitespace-delimited token as the key; rest is a
+        # human reason. The audit only consumes the key.
+        if not body:
+            continue
+        token = body.split(None, 1)[0]
+        if ":" in token:
+            waivers.append(token)
+    return waivers
+
+
+def _attach_xml_audit_findings(
+    path_str: str,
+    findings: list[dict[str, Any]],
+    swmf_root_str: str,
+    session_id: str | None = None,
+) -> None:
+    text, err = _read_file_safe(path_str)
+    if err or text is None:
+        findings.append({
+            "kind": "xml_audit",
+            "location": path_str,
+            "description": "Could not read PARAM.in for XML audit.",
+            "audit_violations": [],
+            "ok": False,
+            "load_error": err or "PARAM.in not readable.",
+        })
+        return
+
+    blocks = _parse_param_command_blocks(text)
+    commands_by_component: dict[str | None, list[str]] = {}
+    for block in blocks:
+        cmd = block.get("command")
+        if not cmd:
+            continue
+        # Skip control commands that exist in PARAM.XML but live in TOP
+        # commandgroups that don't gate the launch (e.g. #RUN, #END).
+        if cmd in {"#RUN", "#END", "#BEGIN_COMP", "#END_COMP"}:
+            continue
+        commands_by_component.setdefault(block.get("component"), []).append(cmd)
+
+    from ..audit import audit_param_against_xml_reads, get_audit_store
+    from ..core.swmf_root import resolve_swmf_root
+    from ..reference.service import get_reference_catalog
+
+    root = resolve_swmf_root(swmf_root=swmf_root_str, run_dir=None)
+    error_payload, catalog = get_reference_catalog(root=root)
+    if catalog is None:
+        findings.append({
+            "kind": "xml_audit",
+            "location": path_str,
+            "description": "XML audit skipped: catalog unavailable.",
+            "audit_violations": [],
+            "ok": False,
+            "load_error": (error_payload or {}).get("message", "catalog unavailable"),
+        })
+        return
+
+    store = get_audit_store()
+    reads = store.get_reads(session_id=session_id)
+    waivers = _extract_xml_audit_waivers(text)
+
+    audit_result = audit_param_against_xml_reads(
+        catalog=catalog,
+        param_commands_by_component=commands_by_component,
+        reads=reads,
+        waivers=waivers,
+    )
+
+    findings.append({
+        "kind": "xml_audit",
+        "location": path_str,
+        "description": (
+            "XML audit passed."
+            if audit_result["ok"]
+            else f"XML audit blocked: {len(audit_result['audit_violations'])} commandgroup(s) not read."
+        ),
+        "ok": audit_result["ok"],
+        "audit_violations": audit_result["audit_violations"],
+        "groups_read": audit_result["groups_read"],
+        "groups_required": audit_result["groups_required"],
+        "groups_waived": audit_result["groups_waived"],
+    })
+
+
+# ---------------------------------------------------------------------------
 # param rule evaluation (consumed when check_rules=True)
 # ---------------------------------------------------------------------------
 
@@ -3189,6 +3422,8 @@ def inspect_artifact(
     swmf_root: str | None = None,
     run_dir: str | None = None,
     check_rules: bool = False,
+    xml_scope: str | None = None,
+    check_xml_audit: bool = False,
 ) -> dict[str, Any]:
     """Inspect one specific local SWMF artifact deeply.
 
@@ -3202,7 +3437,11 @@ def inspect_artifact(
       external refs, parser errors. Semantic intent (sessions, control cadence,
       #SAVEPLOT meaning) is for the agent to read directly from the file. Pass
       check_rules=True to evaluate the user-owned physical_constraints.yaml.
-    - xml: command listing from PARAM.XML parser + command search
+    - xml: PARAM.XML command listing + structured command/commandgroup fetch.
+      Pass xml_scope="command:<NAME>" for a single command's parsed schema,
+      xml_scope="commandgroup:<GROUPNAME>" for every command in a named group
+      (the primary authoring channel — read this before writing the matching
+      PARAM block), or xml_scope="raw_span:<start>-<end>" for raw XML lines.
     - run_dir: artifact presence + PARAM.in summary + log discovery + job scripts + output subdirs
     - build_output: SWMF root markers (dir) or compile/linker errors (file)
     - result: file type detection (binary vs SWMF text output) + structured header parsing
@@ -3230,8 +3469,10 @@ def inspect_artifact(
         summary, findings, evidence = _inspect_param(path, resolved_question, swmf_root_str)
         if check_rules:
             _attach_param_rule_findings(path, findings)
+        if check_xml_audit:
+            _attach_xml_audit_findings(path, findings, swmf_root_str, session_id=run_dir)
     elif resolved_type == "xml":
-        summary, findings = _inspect_xml(path, resolved_question)
+        summary, findings = _inspect_xml(path, resolved_question, xml_scope=xml_scope, session_id=run_dir)
     elif resolved_type == "run_dir":
         summary, findings, evidence = _inspect_run_dir(path, resolved_question, swmf_root_str)
     elif resolved_type == "build_output":
@@ -3314,27 +3555,3 @@ def inspect_artifact(
     if type_warning:
         payload["warnings"] = [type_warning]
     return with_root(payload, root)
-
-
-def register(app: Any) -> None:
-    app.tool(
-        description=(
-            "Inspect one specific local SWMF artifact deeply. "
-            "artifact_type must be one of: 'log', 'param', 'xml', 'run_dir', "
-            "'build_output', 'result', 'jobscript', 'magnetogram', 'ccmc_spec', 'paper_spec'. "
-            "'runlog' is accepted as a log alias. "
-            "Pass check_rules=True with artifact_type='param' to also evaluate the user-owned "
-            "physical_constraints.yaml in support/swmf-params/rules/. "
-            "Use for debugging log files, inspecting PARAM.in structure, validating "
-            "run directories, or examining build output. Start debugging tasks here "
-            "before calling get_evidence. "
-            "Specialized inspectors: log detects first error, stacktrace, components, "
-            "simulation time; param returns structural primitives only (session count, "
-            "component map, includes, external refs, parser errors) — read PARAM.in "
-            "directly for sessions/control cadence/#SAVEPLOT intent; xml lists "
-            "commands from PARAM.XML; run_dir checks artifact presence (SWMF.SUCCESS/DONE), "
-            "summarizes PARAM.in intent, discovers logs with first-error, summarizes "
-            "component output artifacts compactly, and finds job scripts; build_output checks SWMF root markers or compile/linker errors; "
-            "result detects binary vs text format and previews structured SWMF output headers."
-        )
-    )(inspect_artifact)

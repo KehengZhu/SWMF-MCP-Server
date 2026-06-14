@@ -34,18 +34,18 @@ If any of these is missing the skill asks the user once; it does not invent.
 ## Evidence order
 
 1. **Spec inspection.**
-   * `prior_run`: `inspect_artifact(artifact_type="run_dir", path=<dir>)` for layout +
+   * `prior_run`: `swmf inspect --type run_dir --path <dir>` for layout +
      `component_output_artifacts`, then **read the run-local `PARAM.in` directly** for
      run intent (sessions, control cadence, save-plot meaning, command flow). The
      param inspector is structural-only; do not call it for intent reasoning.
-   * `structured_spec`: `inspect_artifact(artifact_type="ccmc_spec", path=<file>)`. The
+   * `structured_spec`: `swmf inspect --type ccmc_spec --path <file>`. The
      parser surfaces typed fields (`run_id`, `model`, `event_time_utc`, `fr_type`,
      `fr_params`, `cone_params`, `cme_params`, `mflampa_params`, `metadata`,
      `input_files_listed`, `output_files_listed`, `quicklook_targets`). Treat absent
      fields as `gap`, never invent.
    * `paper`: see *Paper intent* below. The agent extracts a structured
-     `paper_spec.json` from paper text, asks the user to confirm, then calls
-     `inspect_artifact(artifact_type="paper_spec", path=<paper_spec.json>)`. After
+     `paper_spec.json` from paper text, asks the user to confirm, then runs
+     `swmf inspect --type paper_spec --path <paper_spec.json>`. After
      this step the workflow merges with the `structured_spec` path — same
      archetype detection, same template/recipe/derivation/default ladder, same
      launch gate.
@@ -56,47 +56,44 @@ If any of these is missing the skill asks the user once; it does not invent.
    archetype `id` (`awsom_anisopi_cme`, `sofie_mflampa_cme`, …) drives every
    downstream lookup (templates, recipes, mined defaults). Falling back to a tuple
    match is the recovery path when the spec is thin.
-3. **Template discovery.** Load
-   `support/swmf-params/rules/templates/<archetype>.yaml`. The manifest carries
-   `start_template`, `restart_template`, `required_flag_overrides`, `recipe`, and
-   `secondary_precedents` — all paths resolve under the **shipped** SWMF /
-   SWMFSOLAR source tree (`SWMF/Param/`, `SWMFSOLAR/Param/`); personal study run
-   directories under `SWMFSOLAR/Run_*/` are out of scope and must not appear in
-   any manifest. If no manifest exists, fall back to
-   `get_evidence(query="<archetype> PARAM template", task_type="configuration", goal="PARAM template selection")`
-   and tag `template_choice.provenance="inferred"`.
-3a. **Corpus diff (mandatory).** After selecting the templates in step 3, load
-   `support/swmf-params/rules/defaults/mined/<archetype>_required.yaml` (the mined
-   intersection across the corpus) and
-   `support/swmf-params/rules/defaults/mined/equation_set_required.yaml` (the
-   equation-module → required-command mapping; look up the value of
-   `Config.pl -o=…:e=<Name>`). The union of those two sets is the
-   **command floor** for this archetype. Diff the emerging PARAM draft against:
+3. **Template survey (read-many, not anchor-one).** Open
+   `support/swmf-params/rules/templates/INDEX.md` and read the **set** of shipped
+   PARAM precedents named for the archetype (typically 3–10 files spanning
+   `SWMFSOLAR/Param/`, `SWMF/Param/`, `*/BATSRUS/Param/`, and per-component
+   `Test*/PARAM.in*`). Then run the discovery sweep from
+   `support/swmf-params/rules/templates/discovery.md` to surface additional
+   candidates the static index missed. Read each template directly; do **not**
+   structurally anchor on a single file. The goal is to observe convention
+   variance (TypeFlux, limiter, AMR criteria form, OUTERBOUNDARY axes) across
+   the corpus, not to copy one template.
 
-   * the command floor (mined `_required.yaml` ∪ equation-set requirements),
-   * every entry in `secondary_precedents` from the template manifest,
-   * every entry in `paper_spec.precedent_hint` (paper-cited prior runs;
-     ranked above the manifest-default precedents).
+   Record the survey as `template_survey.md` in the workspace listing every
+   template read and any cross-template variance observed. This becomes part
+   of REPORT.md provenance.
 
-   Any command present in the floor or in *all* precedent-PARAMs but absent
-   from the draft is a **blocking violation** — surface it to the user as a
-   `gap`, never silently fill. This is the rule that would have caught the
-   eclipse2024 missing-physics gap. Paper-supplied `numerics_phrases` should
-   trigger lookup in `support/swmf-params/rules/derivations/` for any explicit
-   command-block translations the corpus alone doesn't supply.
+3a. **Required floors (post-survey, pre-XML).** Load
+   `support/swmf-params/rules/required_floors/equation_set.yaml` and look up
+   the equation-module key matching the `Config.pl -o=SC:u=…,e=<Name>` choice.
+   Treat every command in that list as **must-be-present**. The list is
+   PARAM.XML- / Fortran-attested; corpus-mined intersections are no longer
+   used (they hid `#CURLB0` in the Liu et al. 2026 replication when the
+   archetype's mined slice was statistically small). Surface any
+   floor command missing from the draft as a `gap` — never silently fill.
 4. **Magnetogram and harmonics evidence.**
-   * `inspect_artifact(artifact_type="magnetogram", path=<fits|map>)` when a file is
+   * `swmf inspect --type magnetogram --path <fits|map>` when a file is
      named or downloaded. The inspector reports format, map_type, CR, observation_time,
      realization_count, and grid.
    * Hand off to `swmf-magnetogram` for the alignment policy.
-   * `get_evidence(query="ADAPT magnetogram download", task_type="configuration", goal="magnetogram acquisition entrypoint")`
+   * `swmf get-evidence --query "ADAPT magnetogram download" --task-type configuration --goal "magnetogram acquisition entrypoint"`
      when nothing is named — the entrypoint is `SWMFSOLAR/Scripts/download_ADAPT.py`.
-5. **Build evidence.** Hand off to `swmf-build`; the canonical `Config.pl` flags for the
-   archetype come from `rules/defaults/build_flags.yaml` (provenance `default:<id>`)
-   unless the spec or template manifest overrides them.
+5. **Build evidence.** Hand off to `swmf-build`; the canonical `Config.pl` flags for
+   the archetype come from the matching `case_recipes/<archetype>.md` build section
+   (cross-referenced against `required_floors/equation_set.yaml`). Build-flag-only
+   YAML defaults (the old `rules/defaults/build_flags.yaml`) have been folded into
+   the recipes per the Option-2 narrow-waist refactor.
 6. **Job assembly.**
-   * `inspect_artifact(artifact_type="jobscript", path=<file>)` on the chosen template.
-   * `get_evidence(query="job script <cluster>", task_type="run", goal="cluster submission template")`
+   * `swmf inspect --type jobscript --path <file>` on the chosen template.
+   * `swmf get-evidence --query "job script <cluster>" --task-type run --goal "cluster submission template"`
      if no template is named.
 7. **PARAM.in generation.** Classify as **sweep** vs **construction** per §6.5 of
    `docs/run_replication_plan.md`:
@@ -110,8 +107,8 @@ If any of these is missing the skill asks the user once; it does not invent.
    command and job id. For two-PARAM CME archetypes, `launch_command` is a list:
    submit start → wait for `SWMF.SUCCESS` and confirm `SC/restartOUT/` + `IH/restartOUT/`
    populated → swap PARAM.in for the restart variant → resubmit.
-10. **Monitoring.** Agent shell + periodic `inspect_artifact(artifact_type="run_dir")` and
-    `inspect_artifact(artifact_type="runlog")`.
+10. **Monitoring.** Agent shell + periodic `swmf inspect --type run_dir` and
+    `swmf inspect --type runlog`.
 11. **Postprocessing and visualization.** Hand off to `swmf-analyze`; `swmf-postproc`
     owns IDL execution.
 12. **Validation.** Hand off to `swmf-validation` (Phase 3).
@@ -119,7 +116,7 @@ If any of these is missing the skill asks the user once; it does not invent.
 ## Paper intent (Phase 3)
 
 Triggered when `intent="paper"`. The agent (LLM) reads the paper PDF/preprint;
-**MCP does not parse PDFs** (anti-pattern: MCP-as-PDF-parser, plan §9.2).
+**the swmf CLI does not parse PDFs** (anti-pattern: CLI-as-PDF-parser, plan §9.2).
 
 1. **Extract.** From the paper text (and any tables/figures the user pasted),
    the agent produces a structured normalization with the same shape as
@@ -163,10 +160,10 @@ Triggered when `intent="paper"`. The agent (LLM) reads the paper PDF/preprint;
    consumed. The user edits or accepts; the agent writes the file to
    `<workspace>/paper_spec.json`.
 
-3. **Inspect.** Call
-   `inspect_artifact(artifact_type="paper_spec", path=<paper_spec.json>)`.
+3. **Inspect.** Run
+   `swmf inspect --type paper_spec --path <paper_spec.json>`.
    Surface:
-   * `paper_spec_summary` — the typed fields as MCP loaded them.
+   * `paper_spec_summary` — the typed fields as the swmf CLI loaded them.
    * `paper_spec_provenance` — `source_paper_path` + `confidence_per_field`.
    * `paper_spec_missing_fields` — canonical fields absent from the JSON.
    * `paper_spec_files` / `paper_spec_quicklook` — when listed.
@@ -198,7 +195,7 @@ Anti-patterns specific to paper intent:
 * **Lossy paper extraction.** Confidence-per-field is mandatory; "I read the
   paper, here's a JSON" without confidence labels prevents the launch gate
   from flagging weak inputs.
-* **PDF parsing in MCP.** `inspect_artifact(artifact_type="paper_spec")` only
+* **PDF parsing in the swmf CLI.** `swmf inspect --type paper_spec` only
   loads the JSON/YAML the agent already wrote. The PDF is the agent's input.
 
 ## Construction mode (Phase 2)
@@ -216,17 +213,26 @@ CCMC-driven replications are construction jobs. Steps:
    the relaxation tail starts.
 4. **Walk the authoring ladder per emitted PARAM value.** For every value the agent
    would write, walk this ladder and record the supplying step as the value's
-   provenance:
+   provenance. **The XML lane is mandatory** — for every physics-substantive
+   PARAM block (B0, heating, AMR, boundary, plotting), the agent must run
+   `swmf inspect --type xml --xml-scope 'commandgroup:<name>' --path <component PARAM.XML> --run-dir <run directory>`
+   before writing the block. The audit gate persists the recorded read to
+   `<run_dir>/.swmf_ai/audit.json` and refuses launch otherwise. **The same
+   `--run-dir <run directory>` must be passed to both these commandgroup reads
+   and the `swmf inspect --type param --check-xml-audit` launch check** so the
+   gate can correlate the reads with the launch check.
 
    | Step | Lane | Provenance tag |
    | ---- | ---- | -------------- |
    | 1 | spec field, direct (`fr_longitude`, `event_time_utc`, etc.) | `spec` |
-   | 2 | derivation matches and computes (`rules/derivations/*.yaml`) | `derivation:<id>` |
-   | 3 | recipe specifies a session-structural slot (`rules/case_recipes/*.md`) | `recipe:<id>` |
-   | 4 | template carries the value as-is | `template:<path>` |
-   | 5 | default applies (`rules/defaults/*.yaml`) | `default:<id>` |
-   | 6 | narrative practice resolves a tie (`rules/numerical_practices.md`) | `practice:<entry>` |
-   | 7 | nothing supplies the value | `gap` → user prompt |
+   | 2 | recipe specifies a session-structural slot (`rules/case_recipes/*.md`) | `recipe:<id>` |
+   | 3 | template survey — value seen across the read-many set | `template_survey:<path>` |
+   | 4 | **PARAM.XML default / `<if>` conditional / `<parameter>` schema** | `xml:<commandgroup>` |
+   | 5 | manual worked example (`SWMF/doc/Tex/*.tex`, cross-checked against XML) | `manual:<file>` |
+   | 6 | crosswalk maps paper phrase → command (`rules/crosswalks/*.yaml`) | `crosswalk:<id>` |
+   | 7 | convention breaks a tie between valid alternatives (`rules/conventions.yaml`) | `convention:<id>` |
+   | 8 | derivation computes the value (`rules/derivations/*.yaml`) | `derivation:<id>` |
+   | 9 | nothing supplies the value | `gap` → user prompt |
 
 5. **Two-PARAM split.** For CME archetypes (`awsom_cme_eruption`,
    `sofie_mflampa_cme`), produce **both** `PARAM.expand.start` (background) and
@@ -256,41 +262,58 @@ default if it's archetype-keyed, a recipe entry if it's structural).
 
 For every PARAM value the agent writes during construction, walk this ladder. The first
 step that supplies the value wins; the agent records the supplying step as that value's
-provenance:
+provenance. Step 4 (XML) is **mandatory** for every physics-substantive PARAM block —
+the audit gate enforces this.
 
 | Step | Lane | Provenance tag |
 | ---- | ---- | -------------- |
 | 1 | spec field, direct | `spec` |
-| 2 | derivation matches and computes (`rules/derivations/*.yaml`) | `derivation:<id>` |
-| 3 | recipe specifies a session-structural slot (`rules/case_recipes/*.md`) | `recipe:<id>` |
-| 4 | template carries the value as-is (`rules/templates/*.yaml`) | `template:<path>` |
-| 5 | default applies (`rules/defaults/*.yaml`) | `default:<id>` |
-| 6 | narrative practice resolves a tie (`rules/numerical_practices.md`) | `practice:<entry>` |
-| 7 | nothing supplies the value | `gap` → user prompt |
+| 2 | recipe specifies a session-structural slot (`rules/case_recipes/*.md`) | `recipe:<id>` |
+| 3 | template survey — value seen across the read-many shipped set | `template_survey:<path>` |
+| 4 | **PARAM.XML authority** (`swmf inspect --type xml --xml-scope 'commandgroup:...'`) | `xml:<commandgroup>` |
+| 5 | manual worked example (`SWMF/doc/Tex/*.tex`, cross-checked against XML) | `manual:<file>` |
+| 6 | crosswalk maps paper phrase → command (`rules/crosswalks/*.yaml`) | `crosswalk:<id>` |
+| 7 | convention breaks a tie between valid alternatives (`rules/conventions.yaml`) | `convention:<id>` |
+| 8 | derivation computes the value (`rules/derivations/*.yaml`) | `derivation:<id>` |
+| 9 | nothing supplies the value | `gap` → user prompt |
 
 The agent **must not** invent numerical values. Every `gap` entry surfaces as a
-user-approval item; closing one is a YAML edit in the rules directory so the next
-replication does not re-prompt.
+user-approval item; closing one is a YAML edit in `rules/crosswalks/`,
+`rules/conventions.yaml`, or `rules/case_recipes/` so the next replication does
+not re-prompt. PARAM.XML is the authoritative SWMF schema; the manual is
+hint-tier only and must be cross-checked against PARAM.XML.
 
 ## Launch Gate (mandatory)
 
 Launch is blocked unless every check below passes:
 
-1. `inspect_artifact(artifact_type="param", path=<PARAM.in>, check_rules=True)` — the
-   structural primitive call. **Block on any `severity=block` violation.** `warn` and
-   `info` surface but do not block. The agent has already read PARAM.in directly for
-   intent reasoning earlier in the workflow; this step is purely the rule-eval check.
+1. `swmf inspect --type param --path <PARAM.in> --check-rules --check-xml-audit
+   --run-dir <run directory>` — runs **both** the physical-constraints predicates and the
+   XML audit gate. Pass the **same** `--run-dir <run directory>` that was used for the
+   `swmf inspect --type xml --xml-scope 'commandgroup:...'` reads, so the audit gate can
+   correlate the recorded reads in `<run_dir>/.swmf_ai/audit.json` with this launch check.
+   * `--check-rules` evaluates `rules/physical_constraints.yaml`. **Block on any
+     `severity=block` violation.** `warn` and `info` surface but do not block.
+   * `--check-xml-audit` cross-references every emitted PARAM command against the
+     catalog's command → commandgroup map and the session's recorded
+     `swmf inspect --type xml --xml-scope 'commandgroup:...'` reads. **Block on any
+     `audit_violation`** — the agent must either go back and read the relevant
+     PARAM.XML commandgroup, or emit a single-line waiver in the PARAM REPORT
+     comments (`! xml_audit_waiver: SC:<GROUPNAME>`) with a reason. This is the
+     check that would have caught the Liu et al. 2026 `#CURLB0` omission.
 2. Agent shells `Scripts/TestParam.pl -n=<nproc> <PARAM.in>` from the SWMF root. **Block
    on any error** — this is the schema authority.
-3. PARAM diff vs base template via `compare_artifacts(comparison_type="param")` (or the
-   `param_diff` block of `compare_artifacts(comparison_type="run_dir")` when both runs
-   are assembled), with evidence citation per change, presented to the user.
-4. The skill output's `inferred|assumed` value list is presented to the user.
+3. PARAM diff vs the closest shipped template surveyed in step 3 via
+   `swmf compare --comparison-type param` (or the `param_diff` block of
+   `swmf compare --comparison-type run_dir` when both runs are assembled),
+   with evidence citation per change, presented to the user.
+4. The skill output's `inferred|assumed` value list and `template_survey.md` are
+   presented to the user.
 5. User approval is recorded (timestamp + hash of approved PARAM.in).
 
-Steps 3–5 are skill-level (the gate is enforced by skill policy, not MCP). MCP only
-supplies the deterministic checks in step 1 and the diff in step 3; step 2 is a shell
-call.
+Steps 3–5 are skill-level (the gate is enforced by skill policy, not the swmf CLI). The
+swmf CLI only supplies the deterministic checks in step 1 and the diff in step 3; step 2
+is a shell call.
 
 ## Helper skills
 
@@ -313,8 +336,9 @@ Required fields in the final answer:
 * `intent` — one of `paper|structured_spec|prior_run`.
 * `normalized_spec` — structured representation of model, event time, magnetogram source,
   B0 method, FR type and parameters, target diagnostics, target cluster.
-* `template_choice` — picked PARAM template plus evidence path and `provenance` tag
-  (`manifest` if loaded from `rules/templates/`, else `inferred`).
+* `template_survey` — list of shipped PARAM precedents the agent read (typically
+  3–10 files from `INDEX.md` + `discovery.md`) and the convention variance observed
+  across the set. Replaces the old single-template `template_choice` field.
 * `case_recipe` — pointer to the recipe followed (for construction mode).
 * `external_inputs` — magnetogram file, harmonics file, restart source, with provenance
   (downloaded vs reused vs inferred).
@@ -322,8 +346,11 @@ Required fields in the final answer:
 * `assembled_run_dir` — path of the constructed run directory and its readiness diff vs
   `swmf-run` checks.
 * `param_provenance` — for each emitted/changed PARAM value, the supplying lane tag from
-  the authoring ladder (`spec` | `derivation:<id>` | `recipe:<id>` | `template:<path>` |
-  `default:<id>` | `practice:<entry>` | `gap`).
+  the authoring ladder (`spec` | `recipe:<id>` | `template_survey:<path>` |
+  `xml:<commandgroup>` | `manual:<file>` | `crosswalk:<id>` | `convention:<id>` |
+  `derivation:<id>` | `gap`).
+* `xml_audit_record` — list of commandgroups read this session and the audit gate's
+  pass/violation status from the launch gate.
 * `gaps` — explicit list of `gap` values requiring user input.
 * `launch_gate` — record of every step in *Launch Gate* (rule_violations summary,
   TestParam.pl exit, PARAM diff path, user approval timestamp, approved-PARAM hash).
@@ -366,7 +393,7 @@ ADAPT magnetograms ship with 12 realization layers. SWMFSOLAR's
   (per-cluster scheduler logic lives in the Makefile + `JobScripts/`).
   `Scripts/sub_runs.py` is the alternative entrypoint when chunked submission
   or restart loops are needed.
-* **Monitoring**: `inspect_artifact(artifact_type="run_dir", path=<SIMDIR>)`
+* **Monitoring**: `swmf inspect --type run_dir --path <SIMDIR>`
   surfaces a `run_dir_ensemble` finding with per-realization status and an
   aggregate `{completed, killed, in_progress_or_crashed, prepared,
   missing_executable, total}` tally. Use this to drive the next action
@@ -395,7 +422,7 @@ common scenarios:
 
 1. **Background → eruption (two-PARAM CME)**. After the start PARAM completes
    with `SWMF.SUCCESS`:
-   * `inspect_artifact(artifact_type="run_dir", path=<run>)` confirms
+   * `swmf inspect --type run_dir --path <run>` confirms
      `restart_inventory` shows `SC/restartOUT` and `IH/restartOUT` populated.
    * Either the restart PARAM uses `#INCLUDE RESTART.in` (SWMFSOLAR
      convention) and the framework picks up `SC/restartIN`/`IH/restartIN`
@@ -421,7 +448,7 @@ submission is rerun).
 
 When a realization crashes on the cluster boundary (walltime exceeded, OOM,
 license server hiccup, node failure) rather than on a SWMF-side numerical
-issue, `inspect_artifact(artifact_type="log", path=<runlog>)` surfaces a
+issue, `swmf inspect --type log --path <runlog>` surfaces a
 `cluster_failure_signatures` finding listing one or more of:
 
 * `walltime_exceeded` → `recovery_family=resubmit_with_longer_walltime`
@@ -435,7 +462,7 @@ issue, `inspect_artifact(artifact_type="log", path=<runlog>)` surfaces a
 
 The skill maps each signature to a recovery action *suggestion*, but the
 recovery itself is shell-side (resubmit, request more memory, reload module).
-MCP only reports — it does not modify the jobscript or resubmit. Hand off to
+The swmf CLI only reports — it does not modify the jobscript or resubmit. Hand off to
 `swmf-debug` for non-cluster-boundary failures (failure family
 `runtime_crash_stop`, `numerical_physics_anomaly`, etc.).
 
@@ -449,7 +476,7 @@ MCP only reports — it does not modify the jobscript or resubmit. Hand off to
   CCMC spec and produce both `PARAM.expand.start` and `PARAM.expand.restart` against
   the gate.
 * **Phase 3** — `intent="paper"` end-to-end up to the launch gate via
-  `inspect_artifact(artifact_type="paper_spec")`. `swmf-validation` reference
+  `swmf inspect --type paper_spec`. `swmf-validation` reference
   comparison wired (paper figure / observation trace / CCMC quick-look).
 * **Phase 4 (current)** — multi-realization ensemble support
   (`run_dir_ensemble` finding + ensemble-aware launch/monitor/postproc),

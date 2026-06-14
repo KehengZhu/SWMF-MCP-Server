@@ -8,7 +8,7 @@ description: "Support skill. Owns the SWMFSOLAR project as the canonical operati
 
 This is a **support skill**. `swmf-replicate`, `swmf-build`, and `swmf-run` consult it
 when the operational machinery for solar/CME runs is in scope. The skill exists so the
-agent does not rediscover SWMFSOLAR via `get_evidence` on every call.
+agent does not rediscover SWMFSOLAR via `swmf get-evidence` on every call.
 
 ## Purpose
 
@@ -42,11 +42,11 @@ debugging; cluster submission credentials.
 
 ## Tool Protocol
 
-1. `get_evidence(query="<task>", task_type="configuration|run|analysis", goal="SWMFSOLAR entrypoint")`
+1. `swmf get-evidence --query "<task>" --task-type configuration|run|analysis --goal "SWMFSOLAR entrypoint"`
    — to discover which Makefile target or Script handles the request.
-2. `inspect_artifact(artifact_type="param", path="SWMFSOLAR/Param/<template>", check_rules=True)`
+2. `swmf inspect --type param --path SWMFSOLAR/Param/<template> --check-rules`
    — when comparing a template against the current rules.
-3. `inspect_artifact(artifact_type="jobscript", path="SWMFSOLAR/JobScripts/<file>")`
+3. `swmf inspect --type jobscript --path SWMFSOLAR/JobScripts/<file>`
    — for cluster submission templates.
 4. Direct reads only of files named by evidence.
 
@@ -54,7 +54,7 @@ debugging; cluster submission credentials.
 
 1. `SWMFSOLAR/Makefile` (when the agent is checking what target a `make` invocation
    maps to).
-2. Script `--help` / argparse help text via `get_evidence`.
+2. Script `--help` / argparse help text via `swmf get-evidence`.
 3. `SWMFSOLAR/README` and `SWMFSOLAR/Prompts.txt` for narrative context (lower
    authority; cite explicitly).
 4. Path-pattern inference (lowest authority; surface as `inferred`).
@@ -99,7 +99,7 @@ chain is:
   `error_postproc.log`. The agent reads that log to know which realizations
   to resubmit without re-running the whole ensemble.
 
-Inspection: `inspect_artifact(artifact_type="run_dir", path=<SIMDIR>)` surfaces
+Inspection: `swmf inspect --type run_dir --path <SIMDIR>` surfaces
 a `run_dir_ensemble` finding when ≥2 `runNN/` siblings are present. The
 finding carries `realization_count`, per-realization status (`completed` |
 `killed` | `in_progress_or_crashed` | `prepared` | `missing_executable`), and
@@ -137,7 +137,7 @@ calls.
 
 * Do not hardcode SWMFSOLAR Makefile rules inside skill prose; cite the Makefile target
   and let the agent run `make`.
-* Do not reimplement `download_ADAPT.py` inside MCP. Network calls and retries belong in
+* Do not reimplement `download_ADAPT.py` inside the swmf CLI. Network calls and retries belong in
   the shell.
 * Do not assume a specific Makefile target name across SWMFSOLAR versions; surface the
   evidence path so the user can verify, and set `version_drift_warning=True` when the

@@ -28,35 +28,35 @@ Not in scope: failure diagnosis (that is `swmf-debug`), PARAM semantics
 ## Required Preconditions Before Editing
 
 1. User intent is specific enough to identify the behavior to change.
-2. Affected source files or symbols are identified (from `get_evidence`).
-3. Invariant context exists from v2 evidence, artifact inspection, and named
-   source reads after the v2 gate.
+2. Affected source files or symbols are identified (from `swmf get-evidence`).
+3. Invariant context exists from swmf CLI evidence, artifact inspection, and named
+   source reads after the swmf CLI gate.
 4. Validation artifacts are identified.
 5. At least one rollback-safe comparison path exists.
 
 ## Tool Protocol
 
-```
-get_context(task_type="architecture")
+```bash
+swmf get-context --task-type architecture
 ```
 Only when the affected surface is broad or ambiguous.
 
-```
-get_evidence(mode="hybrid", goal="source context for <change>")
+```bash
+swmf get-evidence --mode keyword --goal "source context for <change>"
 ```
 For exact source files and surrounding interfaces.
 
-```
-inspect_artifact(artifact_type="param"|"run_dir", path=...)
+```bash
+swmf inspect --type param|run_dir --path ...
 ```
 For relevant PARAM.in or run directory context.
 
 Precision follow-up:
-* `get_evidence(mode="keyword", goal="invariant-sensitive symbols and interfaces")`
+* `swmf get-evidence --mode keyword --goal "invariant-sensitive symbols and interfaces"`
   for exact source symbols and nearby interfaces
-* `inspect_artifact(artifact_type="param", question="PARAM implications for this change")`
+* `swmf inspect --type param --question "PARAM implications for this change"`
   when PARAM side effects matter
-* direct source reads only for files explicitly named by the v2 tool output
+* direct source reads only for files explicitly named by the swmf CLI output
 
 ## Output Contract
 

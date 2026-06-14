@@ -275,7 +275,7 @@ def test_swmf_jobscript_skill_exists() -> None:
     skill = _skill_path("support", "swmf-jobscript", "SKILL.md")
     assert skill.is_file()
     text = skill.read_text(encoding="utf-8")
-    for term in ('artifact_type = "jobscript"', "scheduler", "Frontera", "Pleiades"):
+    for term in ("--type jobscript", "scheduler", "Frontera", "Pleiades"):
         assert term in text
 
 
@@ -285,10 +285,20 @@ def test_phase1_support_stubs_exist() -> None:
 
 
 def test_rules_directory_skeleton_present() -> None:
+    # Reshaped in the Option-2 refactor (see plan Part B). The narrow-waist
+    # layout: crosswalks/, case_recipes/, conventions.*, required_floors/,
+    # templates/INDEX.md (no forked YAMLs), physical_constraints.yaml,
+    # corpus_frequency/ (warn-tier statistical only), archetypes.yaml.
     rules = _skill_path("support", "swmf-params", "rules")
     assert (rules / "physical_constraints.yaml").is_file()
-    assert (rules / "numerical_practices.md").is_file()
+    assert (rules / "conventions.md").is_file()
+    assert (rules / "conventions.yaml").is_file()
+    assert (rules / "manual_corrections.md").is_file()
+    assert (rules / "xml_corrections.md").is_file()
     assert (rules / "case_recipes" / "awsom_cme_eruption.md").is_file()
-    assert (rules / "templates" / "awsom_cme.yaml").is_file()
+    assert (rules / "crosswalks" / "sources_and_b0.yaml").is_file()
+    assert (rules / "templates" / "INDEX.md").is_file()
+    assert (rules / "templates" / "discovery.md").is_file()
+    assert (rules / "required_floors" / "equation_set.yaml").is_file()
     assert (rules / "derivations" / "geometric.yaml").is_file()
-    assert (rules / "defaults" / "ops_guards.yaml").is_file()
+    assert (rules / "corpus_frequency" / "INDEX.md").is_file()

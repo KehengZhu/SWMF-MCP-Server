@@ -460,109 +460,19 @@ class TestKnowledgeService:
         results = ks.search_chunks(str(fake_swmf_root), query="MaxIteration")
         assert any(r["symbol_name"] == "ReadParam" for r in results)
 
-    def test_search_source_keyword_mode_returns_keyword_metadata(self, fake_swmf_root: Path) -> None:
-        class UnavailableEmbedder:
-            backend_name = "unavailable"
-            availability_message = "fastembed unavailable"
-            model_name = "test-model"
-            selected_device = None
-
-            @property
-            def is_available(self) -> bool:
-                return False
-
-            def embed_query(self, text: str) -> list[float]:
-                return []
-
-            def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                return []
-
-        monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(knowledge_service_module, "get_text_embedder", lambda: UnavailableEmbedder())
+    def test_search_source_returns_keyword_payload(self, fake_swmf_root: Path) -> None:
+        # Semantic / hybrid retrieval has been removed; search_source always
+        # uses the catalog keyword (BM25) backend.
         payload = ks.search_source(str(fake_swmf_root), query="ReadParam")
 
         assert any(r["name"] == "ReadParam" for r in payload["results"])
-        assert payload["search_mode_requested"] == "keyword"
         assert payload["search_method"] == "keyword"
-        assert payload["semantic_available"] is False
-        assert payload["semantic_degraded_reason"] is None
-        assert payload["semantic_runtime"]["model_name"] is not None
-        monkeypatch.undo()
-
-    def test_search_source_semantic_mode_gracefully_falls_back(self, fake_swmf_root: Path) -> None:
-        class UnavailableEmbedder:
-            backend_name = "unavailable"
-            availability_message = "fastembed unavailable"
-            model_name = "test-model"
-            selected_device = None
-
-            @property
-            def is_available(self) -> bool:
-                return False
-
-            def embed_query(self, text: str) -> list[float]:
-                return []
-
-            def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                return []
-
-        monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(knowledge_service_module, "get_text_embedder", lambda: UnavailableEmbedder())
-        payload = ks.search_source(
-            str(fake_swmf_root),
-            query="ReadParam",
-            search_mode="semantic",
-            similarity_threshold=0.42,
-        )
-
-        assert any(r["name"] == "ReadParam" for r in payload["results"])
-        assert payload["search_mode_requested"] == "semantic"
-        assert payload["search_method"] == "keyword"
-        assert payload["semantic_available"] is False
-        assert payload["semantic_degraded_reason"] is not None
-        assert payload["semantic_runtime"]["availability_message"] is not None
-        assert payload["similarity_threshold"] == pytest.approx(0.42)
-        monkeypatch.undo()
-
-    def test_search_source_semantic_mode_returns_chunk_results_when_backend_available(
-        self,
-        fake_swmf_root: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        class FakeEmbedder:
-            backend_name = "fake"
-            availability_message = None
-
-            @property
-            def is_available(self) -> bool:
-                return True
-
-            def embed_query(self, text: str) -> list[float]:
-                lowered = text.lower()
-                return [1.0 if "maximum iteration" in lowered else 0.0, 0.0]
-
-            def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                vectors: list[list[float]] = []
-                for text in texts:
-                    lowered = text.lower()
-                    vectors.append([1.0 if "maxiteration" in lowered else 0.0, 0.0])
-                return vectors
-
-        monkeypatch.setattr(knowledge_service_module, "get_text_embedder", lambda: FakeEmbedder())
-
-        payload = ks.search_source(
-            str(fake_swmf_root),
-            query="maximum iteration",
-            search_mode="semantic",
-        )
-
-        assert payload["search_mode_requested"] == "semantic"
-        assert payload["search_method"] == "semantic"
-        assert payload["semantic_available"] is True
-        assert payload["semantic_degraded_reason"] is None
-        assert payload["semantic_runtime"]["backend_name"] == "fake"
-        assert any(item.get("result_kind") == "chunk" for item in payload["results"])
-        assert any("MaxIteration" in item.get("chunk_text", "") for item in payload["results"])
+        # The semantic_runtime, semantic_available, semantic_degraded_reason,
+        # search_mode_requested fields are gone from the payload contract.
+        assert "semantic_runtime" not in payload
+        assert "semantic_available" not in payload
+        assert "semantic_degraded_reason" not in payload
+        assert "search_mode_requested" not in payload
 
     def test_get_param_evidence_via_service(self, fake_swmf_root: Path) -> None:
         ks.build_index(str(fake_swmf_root), force=True)
@@ -575,7 +485,8 @@ class TestKnowledgeService:
         payload = ks.status_as_payload(status)
         for key in ("ok", "db_path", "swmf_root", "schema_version", "symbol_count", "file_count", "is_stale"):
             assert key in payload
-        assert "semantic_runtime" in payload
+        # semantic_runtime has been removed from the status payload.
+        assert "semantic_runtime" not in payload
 
 
 # ---------------------------------------------------------------------------

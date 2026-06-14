@@ -83,13 +83,12 @@ attempt:
 * Run `Scripts/TestParam.pl` at the nproc counts named in the attempt's
   `REPORT.md` (typically 3 counts spanning the intended job range).
   Record exit codes.
-* Call `inspect_artifact(artifact_type="param",
-  path=attempt/PARAM.in, check_rules=True)`. Record
-  `rule_check_summary.{block,warn,info}`.
+* Run `swmf inspect --type param --path attempt/PARAM.in --check-rules`.
+  Record `rule_check_summary.{block,warn,info}`.
 * Verify `component_map` matches the paper's components.
 * Verify build-vs-PARAM consistency: read `CONFIG.sh` for `e=<Name>`;
   every command required for that equation set (cross-reference
-  `rules/defaults/mined/equation_set_required.yaml`) must be present in
+  `rules/required_floors/equation_set.yaml`) must be present in
   the PARAM.
 * Verify `external_references` resolve.
 * Verify session structure (`#STOP` per session, `#END` terminating).
@@ -104,9 +103,8 @@ attempt:
 * Verify the `gap` list exists.
 
 **C. Reference-diff: physics-command parity (graded, needs reference).**
-* Call `compare_artifacts(attempt=attempt/PARAM.in,
-  reference=eval/papers/<name>/reference/PARAM.in)`. This returns the
-  per-command diff (`missed`, `extra`, value mismatches).
+* Run `swmf compare --left attempt/PARAM.in --right eval/papers/<name>/reference/PARAM.in`.
+  This returns the per-command diff (`missed`, `extra`, value mismatches).
 * Categorize each diff record using the rubric's category table:
   - **physics-blocking** (`#HEATCONDUCTION`, `#SEMIIMPLICIT`,
     `#ANISOTROPICPRESSURE`, `#CURLB0`, `#COORDSYSTEM`)
@@ -144,83 +142,109 @@ and `runs/<date>/gap_list.md` (one record per categorized gap).
 
 ### Stage 3 — Classify (route each gap to a lane)
 
-For each gap in `gap_list.md`, decide which lane the fix must come
-from. The seven lanes are mutually exclusive and prioritized in order:
+For each gap in `gap_list.md`, decide which lane the fix must come from. Per
+the Option-2 refactor (see plan Part C2) the lane taxonomy is **6 lanes**
+mutually exclusive, prioritized in order:
 
-| Order | Lane | Signal to look for | Fix source | Auto-fix? |
+| Order | Lane | Signal to look for | Fix lands in | Auto-fix? |
 |---|---|---|---|---|
-| 1 | **wiring** | Rule already exists in `rules/` but didn't fire (grep `rules/` for the command) | Matcher or skill-text patch | ✅ |
-| 2 | **corpus-derivable** | Command in ≥80 % of shipped exemplars for this archetype, but no rule yet | `mine_param_corpus.py` extension → `mined:` YAML | ✅ |
-| 3 | **source-derivable** | Command gated by a Fortran flag/variable in `SWMF/{GM,SC}/BATSRUS/src/Mod*.f90` or `share/Library/src/*.f90`; or fully described in `PARAM.XML` | `derivation:` rule citing BATSRUS file:line or PARAM.XML | ✅ |
-| 4 | **paper-extractable** | Phrase/value appears in `paper.pdf` body but missing from `paper_spec.json` | Patch the extractor prompt or the spec field | ✅ |
-| 5 | **style-alternative** | A documented alternative is present (the attempt uses `#GRIDRESOLUTION`; the reference uses `#GRIDLEVEL`) | Skill update — surface in `inferred \| assumed` | ✅ |
-| 6 | **expert-knowledge** | No signal in any of the above sources; the value is an operator preference | Queue to `eval/expert_queue.md` for human conversation | ❌ |
-| 7 | **reference-only** | The *only* signal is the reference itself | Flag for human; rule provenance would necessarily cite reference | ❌ |
+| 1 | **xml_lookup** | Agent emitted the command but never ran `swmf inspect --type xml --xml-scope 'commandgroup:...'` for its commandgroup (audit_violation in launch gate, or absent from `xml_audit_record`) | `swmf-replicate/SKILL.md` ladder strengthening + audit gate tightening | ✅ (skill-prompt patch, regression-gated) |
+| 2 | **crosswalk** | Paper used a physics phrase that did not map to any command name (agent surfaced a gap with no candidate); the phrase + the correct command are both known | `rules/crosswalks/<topic>.yaml` (new entry) | ✅ |
+| 3 | **convention** | Multiple SWMF commands were valid for the same job; agent picked the wrong one for this archetype | `rules/conventions.yaml` (new tie-breaker entry) | ✅ |
+| 4 | **recipe** | Session ladder / AMR pattern / equation-set choice diverges from archetype norm; the recipe needs an update | `rules/case_recipes/<archetype>.md` | ✅ |
+| 5 | **paper_extraction** | Paper-stated value missing from `paper_spec.json` because the extractor missed it (low confidence, hidden in a table, etc.) | `swmf-replicate` Stage 1 spec-extraction prompt | ✅ (skill-prompt patch, regression-gated) |
+| 6 | **expert_review** | None of the above fits; the value is operator preference, or the lane is genuinely ambiguous | Queue to `eval/expert_queue.md` for human conversation | ❌ |
 
-To classify, the agent runs the following checks **in order** and stops
-at the first match:
+Classification procedure (run **in order**, stop at first match):
 
-1. Grep `rules/` for the command name. If a matching rule exists →
-   `wiring`.
-2. Read `rules/defaults/mined/<archetype>_required.yaml`. If the
-   command is listed → `wiring` (the mined rule should have fired but
-   didn't). If not listed, run the miner with `--probe <command>` to
-   compute the current frequency in the corpus. If ≥0.8 →
-   `corpus-derivable`.
-3. Grep BATSRUS source / PARAM.XML for the command. If gated by a
-   variable/flag → `source-derivable`.
-4. Read `eval/papers/<name>/cache/paper_spec.json` and the paper body
-   (one targeted Read of the paper section likely to mention this
-   command). If the paper names the value → `paper-extractable`.
-5. Check `rules/archetypes.yaml` and the `case_recipes/` for
-   documented alternatives. If yes → `style-alternative`.
-6. Otherwise → `expert-knowledge` (default for value mismatches with
-   operator-tunable parameters) or `reference-only` (if the command
-   itself is exotic and absent from shipped corpus + source + paper).
+1. Read `runs/<date>/attempt/REPORT.md` and look at the `xml_audit_record`
+   field from the launch gate. If the missed command's commandgroup is
+   NOT in `groups_read` → `xml_lookup`.
+2. Re-read the paper section for the affected physics topic. If the paper
+   uses a phrase that does not appear in any `rules/crosswalks/*.yaml`
+   `phrases:` field, and the correct command is known from the reference
+   → `crosswalk`.
+3. Check whether the reference uses a different but equivalent SWMF
+   command for the same job (e.g. `#AMRCRITERIARESOLUTION` vs
+   `#AMRCRITERIALEVEL`). If yes → `convention`.
+4. Check `rules/case_recipes/<archetype>.md`. If the recipe does not
+   describe the session structure the reference uses → `recipe`.
+5. Read `eval/papers/<name>/cache/paper_spec.json`. If the paper body
+   names the value but the spec is missing it → `paper_extraction`.
+6. Otherwise → `expert_review`.
+
+The old `wiring`, `corpus-derivable`, and `source-derivable` lanes have been
+folded: corpus-mined intersections are gone (they hid `#CURLB0` in Liu et
+al. 2026); PARAM.XML-derivable knowledge belongs in `required_floors/` or
+PARAM.XML itself, not in a rules-layer derivation; and the wiring lane
+was a symptom of mined rules silently failing — which can no longer
+happen now that the agent reads PARAM.XML directly under audit-gate
+enforcement.
 
 Write `runs/<date>/improvement_plan.md`: one section per gap with the
 category from Stage 2, the lane from Stage 3, the proposed-fix source,
 and a one-paragraph proposed action.
 
-### Stage 4 — Propose (draft rules)
+### Stage 4 — Propose (draft rules or skill-prompt patches)
 
-For each gap whose lane permits auto-fix (lanes 1–5), draft a candidate
-rule:
+For each gap whose lane permits auto-fix (lanes 1–5), draft the appropriate
+artifact:
 
-```yaml
-# <descriptive name>.yaml — proposed rule
-when:
-  archetype: <archetype-id>
-  # additional predicates per rules/README.md predicate vocabulary
-emit:
-  command: "#<COMMAND>"
-  params: { ... }
-provenance:
-  type: mined | derivation | paper_spec | wiring | skill_text
-  source: <absolute file path or DOI>
-  cite: <line range or page+quote>
-  added_by: swmf-improve
-  added_on: <YYYY-MM-DD>
-  closes_gap_in: <paper-name>
+**Lane 1 — xml_lookup** (skill-prompt patch):
+```markdown
+# patch — strengthen swmf-replicate audit gate
+Target file: src/agent_assets/skills/swmf-replicate/SKILL.md
+Diff: add a checkpoint requiring `swmf inspect --type xml --xml-scope 'commandgroup:<X>' --run-dir <run directory>`
+before authoring the <Y> block. Pass the SAME --run-dir to this xml read
+and to the `swmf inspect --type param --check-xml-audit --run-dir <run directory>`
+launch check so the audit gate (persisted to <run_dir>/.swmf_ai/audit.json) can
+correlate the recorded commandgroup reads with the launch check.
 ```
 
-**Provenance check (mandatory).** Before writing the rule to disk,
-verify that `provenance.source` does NOT resolve under any
-`eval/papers/*/reference/` directory. Compute the absolute path and
-check whether it is a descendant of any reference directory. If so:
+**Lane 2 — crosswalk** (new YAML entry):
+```yaml
+# rules/crosswalks/<topic>.yaml — appended entry
+crosswalks:
+  - id: <slug>
+    phrases:
+      - "<phrase exactly as it appears in the paper>"
+    commands:
+      - "#<COMMAND>.<parameter>"
+    xml_group: "<COMPONENT>:<GROUPNAME>"
+    archetypes: [<archetype-id>]
+    notes: <one-line non-obvious rationale>
+    provenance:
+      lane: crosswalk
+      added_by: swmf-improve
+      added_for_eval: <paper-name>
+      added_on: <YYYY-MM-DD>
+```
 
-* Do not write the rule.
+**Lane 3 — convention** (new entry in `rules/conventions.yaml`).
+**Lane 4 — recipe** (markdown edit to `rules/case_recipes/<archetype>.md`).
+**Lane 5 — paper_extraction** (skill-prompt patch to `swmf-replicate`
+Stage 1, identical shape to lane 1).
+
+**Provenance / contamination check (mandatory).** Before writing the
+artifact to disk, verify that the proposed entry does NOT include literal
+text or numeric values extracted from any path under
+`eval/papers/*/reference/`. Compute the absolute path of any cited
+source and check whether it is a descendant of any reference directory.
+If so:
+
+* Do not write the rule / patch.
 * Write `eval/proposals/rejected/<date>-<gap>.md` with the offending
   source, the gap it was trying to close, and a note that the lane
-  should have routed to `reference-only` instead. Update the
+  should have routed to `expert_review` instead. Update the
   classification.
 
-For lane 6 (`expert-knowledge`) gaps, append an entry to
+For lane 6 (`expert_review`) gaps, append an entry to
 `eval/expert_queue.md` using the template at the top of that file. Do
 not draft a rule.
 
-Write all drafted rules to `runs/<date>/proposals/` first (not directly
-into `rules/`). They move into `rules/` only after Stage 5 gates pass.
+Write all drafted artifacts to `runs/<date>/proposals/` first (not directly
+into `rules/` or `src/agent_assets/skills/`). They move into the live
+tree only after Stage 5 gates pass.
 
 ### Stage 5 — Regress + merge
 
@@ -282,19 +306,23 @@ The terminal message summarizes:
 ```
 swmf-improve cycle on <paper-name>:
   attempt scored: A=PASS, B=22/24, C=2 missed (1 physics, 1 op), D=7 op-mismatch, E=PASS
-  gaps classified: 3 corpus-derivable, 1 source-derivable, 2 expert-knowledge, 0 reference-only
-  proposals drafted: 4
-  auto-merged: 3
+  gaps classified: 1 xml_lookup, 2 crosswalk, 1 convention, 1 paper_extraction, 1 expert_review
+  proposals drafted: 5
+  auto-merged: 4
   pending review: 1 (see eval/proposals/<date>-<gap>.md)
-  expert queue: +2 entries (see eval/expert_queue.md)
+  expert queue: +1 entry (see eval/expert_queue.md)
 ```
 
 ## Partial invocation
 
-The skill accepts two reduced modes for development / debugging:
+The skill accepts three reduced modes for development / CI / regression:
 
-* `--score-only` — runs Stage 1 + Stage 2, writes `score.md` and
-  `gap_list.md`, then stops. Useful for replaying v2/v3 evals.
+* `--only=eval` — runs Stage 1 + Stage 2 only and writes `score.md` and
+  `gap_list.md`, then stops. The same mode used by CI to confirm no
+  refactor regresses any paper in `eval/papers/`. No proposals, no merges.
+* `--only=eval --all` — runs `--only=eval` over **every** paper in
+  `eval/papers/` (plus the holdout) and emits a single score matrix per
+  invocation. Wire into pytest as a slow-tier test.
 * `--no-merge` — runs through Stage 4 (proposals drafted, queues
   written) but skips Stage 5. The proposals stay under
   `runs/<date>/proposals/` and are not regression-tested.
@@ -315,7 +343,7 @@ a second paper before relying on auto-merge.
 ## Invariants
 
 * The skill never reads any file under `eval/papers/*/reference/`
-  except to invoke `compare_artifacts` in Stage 2. The reference is
+  except to run `swmf compare` in Stage 2. The reference is
   evidence of the gap, not a source for the fix.
 * `provenance.source` must resolve outside `eval/papers/*/reference/`.
   This is enforced twice: at proposal-write time and at pre-merge

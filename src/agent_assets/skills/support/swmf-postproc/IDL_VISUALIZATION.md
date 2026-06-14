@@ -27,27 +27,27 @@ gather and normalize IDL visualization evidence.
 ## Evidence Order
 
 1. If a run directory or output file is named:
-   `inspect_artifact(artifact_type="run_dir"|"result", path=<path>)`
+   `swmf inspect --type run_dir|result --path <path>`
 2. Normalize the prompt before retrieval:
    - named procedure or workflow: `plot_data`, `show_data`, `read_data`, `animate_data`, `plot_log_data`, `read_log_data`
    - inventory request: `list IDL plotting procedures`
    - manual detail: `func`, `plotmode`, `transform`, `slice`, `export`
-   - if the prompt is broad, do not pass it through unchanged to `get_evidence`
+   - if the prompt is broad, do not pass it through unchanged to `swmf get-evidence`
 3. For named procedures or procedure inventories:
-   `get_evidence(query=<normalized procedure-or-inventory-task>, mode="keyword", goal="IDL procedure signature and usage")`
+   `swmf get-evidence --query "<normalized procedure-or-inventory-task>" --mode keyword --goal "IDL procedure signature and usage"`
    - for animations, normalize to
-     `get_evidence(query="animate_data", mode="keyword", goal="IDL procedure signature and usage")`
+     `swmf get-evidence --query "animate_data" --mode keyword --goal "IDL procedure signature and usage"`
 4. For `func`, `plotmode`, transform, slicing, animation, log plotting, or export details:
-   `get_evidence(query=<normalized specific-term>, mode="keyword", goal="IDL visualization manual detail")`
+   `swmf get-evidence --query "<normalized specific-term>" --mode keyword --goal "IDL visualization manual detail"`
 5. For postprocessing entrypoints:
-   `get_evidence(query="IDL postprocessing", task_type="analysis", goal="IDL visualization entrypoints")`
+   `swmf get-evidence --query "IDL postprocessing" --task-type analysis --goal "IDL visualization entrypoints"`
 6. Direct file reads are allowed only for files named by evidence, normally:
    `share/IDL/General/procedures.pro`, `share/IDL/General/funcdef.pro`,
    examples under `share/IDL/**`, or `docs/idl.md`.
 
-## MCP Evidence Contract
+## swmf CLI Evidence Contract
 
-IDL evidence from MCP must stay factual:
+IDL evidence from the swmf CLI must stay factual:
 
 - procedure name, kind, signature, keywords, category, source path, and line
 - run-directory inventory and result-file type
@@ -60,7 +60,7 @@ of the normalized retrieval forms above. If the normalized query still returns
 no IDL evidence, fall back to the artifact name, a term from the file header, or
 an exact procedure name mentioned in docs.
 
-MCP must not emit recommended workflows, next tools, or plotting advice. The
+The swmf CLI must not emit recommended workflows, next tools, or plotting advice. The
 agent infers the workflow from this playbook and the evidence.
 
 ## Decision Matrix
@@ -81,7 +81,7 @@ For requests that ask Codex to create a plot, image, movie, or export artifact,
 use IDL as the renderer by default and use SWMF IDL macros before custom
 graphics:
 
-1. Inspect the named run directory or result file with MCP. Use the evidence only
+1. Inspect the named run directory or result file with the swmf CLI. Use the evidence only
    to identify the artifact, variables, output groups, and example filenames;
    do not manually reconstruct the plotted data unless IDL cannot run. Never
    open or parse SWMF output files with common command-line tools; use IDL/SWMF

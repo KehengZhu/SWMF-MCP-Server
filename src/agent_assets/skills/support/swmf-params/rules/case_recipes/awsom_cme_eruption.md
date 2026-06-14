@@ -17,7 +17,7 @@ This archetype produces **two** PARAM.in files:
 | `PARAM.expand.start`   | steady-state background | `F` | absent | writes `SC/restartOUT/`, `IH/restartOUT/` |
 | `PARAM.expand.restart` | time-accurate eruption  | `T` | present in SC, session 1 | reads `SC/restartIN/restart.H`, `IH/restartIN/restart.H` |
 
-A merged single-PARAM is rejected by this recipe — see `numerical_practices.md`.
+A merged single-PARAM is rejected by this recipe — see `conventions.md`.
 
 ## `PARAM.expand.start` session ladder (background)
 

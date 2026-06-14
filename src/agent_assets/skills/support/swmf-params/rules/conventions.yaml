@@ -1,0 +1,86 @@
+# Machine-readable convention tie-breakers.
+#
+# When more than one SWMF command/value is valid for the same physics job,
+# this file picks the one that matches archetype convention.
+#
+# Entry format:
+#   id:            unique slug
+#   archetypes:    list of archetype ids the convention applies to (or ["*"] for universal)
+#   when:          short description of the choice point
+#   prefer:        the chosen command/parameter/value
+#   over:          the rejected alternative(s)
+#   notes:         one-line rationale
+#   provenance:    where the convention came from
+#
+# These are *tie-breakers*, not floors. PARAM.XML and the paper override.
+
+conventions:
+
+  - id: amr_criteria_form
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    when: "AMR refinement criteria block style"
+    prefer: "#AMRCRITERIARESOLUTION with StringRefine=dphi (degree-per-cell targets)"
+    over: ["#AMRCRITERIALEVEL with explicit Level numbers"]
+    notes: >
+      The dphi form maps cleanly to paper-supplied angular resolutions
+      (e.g. 1.4° → 0.7° → 0.35°). The Level form forces the agent to
+      translate degrees → integer levels, which is implicit and error-prone.
+
+  - id: nonconservative_for_awsom_steady
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    when: "#NONCONSERVATIVE.UseNonConservative for AWSoM SC-only steady state"
+    prefer: "T"
+    over: ["F"]
+    notes: >
+      AWSoM SC-only steady state with #CURLB0 and FDIPS B0 typically uses
+      non-conservative pressure update to avoid shock-induced heating in
+      the low corona. SC+IH steady-state runs prefer F. Paper-supplied
+      switch overrides.
+
+  - id: outer_boundary_axes
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    when: "OUTERBOUNDARY for axis faces 3-6 under spherical_genr"
+    prefer: "float"
+    over: ["periodic"]
+    notes: >
+      Under spherical_genr only the radial faces (Bc1=user, Bc2=float)
+      carry physical meaning; the spherical wraparound makes Bc3-Bc6
+      formally float in the FDIPS reference workflow. Some legacy
+      harmonics templates use periodic; both run, but float matches the
+      conservative reference for steady state.
+
+  - id: minimum_temperature
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    when: "#MINIMUMTEMPERATURE.TminDim default when paper does not state"
+    prefer: "2.0e4"
+    over: ["5.0e4"]
+    notes: >
+      2e4 K matches the chromospheric reference floor for steady-state
+      AWSoM. Templates copied from CME-oriented runs sometimes carry 5e4
+      as a robustness bump; for steady-state replication prefer 2e4.
+
+  - id: amr_session_split
+    archetypes: [awsom_steady_sc]
+    when: "Multi-stage AMR in steady-state session ladder"
+    prefer: >
+      Three sessions with progressive #AMRCRITERIARESOLUTION blocks when
+      the paper describes refinement at distinct iteration counts
+      (e.g. 20k / 40k / 60k).
+    over: ["Single session with all criteria + #DOAMR DnAmr=20000"]
+    notes: >
+      The single-block form runs every criterion at every AMR pass; the
+      multi-session split replicates the paper's literal staging. The
+      single-block form is the convenient shorthand the corpus uses.
+
+  - id: chen2016_fifth_order_tail
+    archetypes: [awsom_steady_sc, awsom_steady_sc_only]
+    when: "5th-order tail for steady-state AWSoM (final convergence)"
+    prefer: >
+      #SCHEME nOrder=5 + Linde + mc3 + #SCHEME5 MP5 in a final session
+      with #LOWORDERREGION shielding the outer shell.
+    over: ["nOrder=2 mc3 only (stop at session 2)"]
+    notes: >
+      The Chen 2016 5th-order path is the canonical SWMFSOLAR pattern for
+      final convergence. Final session iterations are usually +10000 on
+      top of the 2nd-order ladder. mc3 = Koren (confirmed in
+      ModFaceValue.f90).

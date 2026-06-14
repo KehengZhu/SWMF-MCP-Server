@@ -12,12 +12,7 @@ def build_agent_context_pack(
     index_status: dict[str, Any],
     search_results: Sequence[dict[str, Any]],
     reference_context: dict[str, Any],
-    search_mode_requested: str,
     search_method: str,
-    semantic_available: bool,
-    semantic_degraded_reason: str | None,
-    semantic_runtime: dict[str, Any],
-    similarity_threshold: float | None,
     query_attempts: Sequence[dict[str, str | None]],
 ) -> dict[str, Any]:
     entities = query_analysis.get("entities", {})
@@ -29,12 +24,7 @@ def build_agent_context_pack(
         "query_analysis": query_analysis,
         "index_status": index_status,
         "search_strategy": {
-            "search_mode_requested": search_mode_requested,
             "search_method": search_method,
-            "semantic_available": semantic_available,
-            "semantic_degraded_reason": semantic_degraded_reason,
-            "semantic_runtime": semantic_runtime,
-            "similarity_threshold": similarity_threshold,
             "query_attempts": list(query_attempts),
         },
         "grounded_context": {

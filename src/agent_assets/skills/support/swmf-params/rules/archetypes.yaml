@@ -9,7 +9,7 @@
 #
 # Each entry:
 #   id            - stable archetype label; emitted as a key in templates/, case_recipes/,
-#                   and defaults/mined/.
+#                   and corpus_frequency/.
 #   description   - one line, physics-level. LLMs match paper text against this.
 #   model         - equation-set family. One of:
 #                   AwsomAnisoPi | AwsomR | Awsom | AwsomSA | Mhd | OuterHelio | Geospace | Other
