@@ -54,6 +54,8 @@ description: "Use when the task is about preparing or changing a SWMF case: PARA
   structure is involved.
 * `swmf-magnetogram` — when `#HARMONICSFILE`, `#FDIPS`, or magnetogram input files are
   involved.
+* `swmf-mflampa` — when the component is SP/MFLAMPA: MFLAMPA PARAM command meaning, a
+  standalone MFLAMPA `PARAM.in`, or `Config.pl -g` grid sizing.
 
 ## Outputs
 

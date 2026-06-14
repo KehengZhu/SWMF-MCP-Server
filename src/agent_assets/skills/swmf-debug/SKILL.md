@@ -91,6 +91,7 @@ Never patch when:
 * `swmf-implementation` — for source patch preparation and invariant context
 * `swmf-exact-lookup` — when findings name a specific symbol
 * `swmf-params` — when narrowed to PARAM semantics
+* `swmf-mflampa` — when the failure is in an MFLAMPA build/run/test (SP component)
 
 ## Outputs (required)
 

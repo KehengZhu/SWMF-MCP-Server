@@ -48,6 +48,7 @@ Support skills:
 - `swmf-architecture`
 - `swmf-exact-lookup`
 - `swmf-implementation`
+- `swmf-mflampa` — SP/MFLAMPA SEP-model expert (modules, `make test_mflampa`, MFLAMPA params)
 - `swmf-params`
 - `swmf-postproc`
 

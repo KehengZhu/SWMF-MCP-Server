@@ -34,6 +34,7 @@ description: "Use when the question is broad, conceptual, cross-component, or as
 
 * `swmf-architecture` — for deep coupling or control-flow questions
 * `swmf-params` — if the explanation requires understanding a PARAM command
+* `swmf-mflampa` — when explaining the SP/MFLAMPA SEP model (transport solve, modules, coupling)
 
 ## Outputs
 

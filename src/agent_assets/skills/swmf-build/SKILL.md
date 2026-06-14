@@ -33,6 +33,8 @@ description: "Use when the task is about compiling, setting up build targets, bu
 * `swmf-swmfsolar` — for AWSoM/SOFIE replication, the canonical `Config.pl` and `make`
   patterns live in SWMFSOLAR's Makefile rather than being rederived. Cite that helper
   when the build target is part of a CME or solar-wind replication workflow.
+* `swmf-mflampa` — when building MFLAMPA standalone (`Config.pl -g` grid sizing,
+  `MFLAMPA.exe`); its build/test flow runs from *inside* `SP/MFLAMPA`, not the SWMF root.
 
 ## Outputs
 

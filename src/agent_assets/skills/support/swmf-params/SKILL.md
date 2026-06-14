@@ -41,6 +41,10 @@ Answer questions about:
 * session termination: MaxIter (steady state) vs TimeMax (time-accurate)
 
 Not in scope: build steps, run execution, job submission, failure diagnosis.
+Standalone MFLAMPA SEP-physics commands (`#ADVECTION`, `#DIFFUSION`, `#MOMENTUMBC`,
+`#FOCUSEDTRANSPORT`, `#TURBULENTSPECTRUM`, momentum/pitch-angle grid, end BCs) →
+`swmf-mflampa`. This skill owns only how MFLAMPA is *wired into a SOFIE run* (the
+`#FIELDLINE` registry and `SC→SP`/`IH→SP` coupling cadence), not the SP-side kinetics.
 
 ## Model Variant Quick Reference
 

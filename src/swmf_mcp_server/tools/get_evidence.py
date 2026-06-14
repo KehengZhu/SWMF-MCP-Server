@@ -548,7 +548,7 @@ def get_evidence(
     resolved_task_type = _normalize_task_type(task_type)
     resolved_module = _normalize_module(module)
     resolved_scope = _append_unique_scope(list(scope or []), resolved_module)
-    resolved_top_k = max(1, min(int(top_k), _MAX_TOP_K))
+    resolved_top_k = max(1, min(int(top_k) if top_k is not None else _DEFAULT_TOP_K, _MAX_TOP_K))
     goal_text = goal or query
 
     assert root.swmf_root_resolved is not None

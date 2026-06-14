@@ -51,6 +51,8 @@ description: "Use when the task is about how to execute a SWMF simulation: launc
 * `swmf-jobscript` — when a candidate job script is named or a cluster template is needed.
   Run `swmf inspect --type jobscript --path <file>` whenever the user
   references a specific job file rather than relying on filename heuristics.
+* `swmf-mflampa` — when running MFLAMPA standalone (`mpirun ./MFLAMPA.exe`, MH_data
+  input) or the `make test_mflampa` suite (run from inside `SP/MFLAMPA`).
 
 ## Outputs
 
